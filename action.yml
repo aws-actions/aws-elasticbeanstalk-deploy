@@ -1,0 +1,89 @@
+name: 'Deploy to AWS Elastic Beanstalk'
+description: 'This action deploys to AWS Elastic Beanstalk with auto-creation and retries'
+author: 'AWS Elastic Beanstalk'
+
+inputs:
+  aws-region:
+    description: 'AWS Region'
+    required: true
+  application-name:
+    description: 'Elastic Beanstalk Application Name'
+    required: true
+  environment-name:
+    description: 'Elastic Beanstalk Environment Name'
+    required: true
+  version-label:
+    description: 'Version label for deployment (defaults to git SHA)'
+    required: false
+  deployment-package-path:
+    description: 'Path to existing deployment package (auto-created if not specified)'
+    required: false
+  solution-stack-name:
+    description: 'Solution stack name (e.g., "64bit Amazon Linux 2023 v4.3.0 running Python 3.11", "64bit Amazon Linux 2023 v6.3.1 running Node.js 20"). Cannot be used with platform-arn.'
+    required: false
+  platform-arn:
+    description: 'Platform ARN for the environment (e.g., "arn:aws:elasticbeanstalk:us-east-1::platform/Python 3.11 running on 64bit Amazon Linux 2023/4.3.0"). Cannot be used with solution-stack-name.'
+    required: false
+  create-environment-if-not-exists:
+    description: 'Create environment if it does not exist'
+    required: false
+    default: 'true'
+  create-application-if-not-exists:
+    description: 'Create application if it does not exist'
+    required: false
+    default: 'true'
+  wait-for-deployment:
+    description: 'Wait for deployment to complete'
+    required: false
+    default: 'true'
+  wait-for-environment-recovery:
+    description: 'Wait for environment health to recover after deployment'
+    required: false
+    default: 'true'
+  deployment-timeout:
+    description: 'Maximum time to wait for deployment (seconds)'
+    required: false
+    default: '900'
+  max-retries:
+    description: 'Maximum number of retries for failed operations'
+    required: false
+    default: '2'
+  retry-delay:
+    description: 'Initial delay between retries (seconds, uses exponential backoff)'
+    required: false
+    default: '5'
+  use-existing-application-version-if-available:
+    description: 'Reuse existing application version if it already exists'
+    required: false
+    default: 'true'
+  create-s3-bucket-if-not-exists:
+    description: 'Create S3 bucket if it does not exist'
+    required: false
+    default: 'true'
+  s3-bucket-name:
+    description: 'S3 bucket name for deployment packages (defaults to {applicationName}-{accountId})'
+    required: false
+  exclude-patterns:
+    description: 'Comma-separated list of patterns to exclude from deployment package (e.g., "*.git*,*node_modules*,*.env*")'
+    required: false
+  option-settings:
+    description: 'Elastic Beanstalk option settings as JSON array. Required when creating a new environment - MUST include IAM settings: [{"Namespace":"aws:autoscaling:launchconfiguration","OptionName":"IamInstanceProfile","Value":"your-instance-profile"},{"Namespace":"aws:elasticbeanstalk:environment","OptionName":"ServiceRole","Value":"your-service-role"}]'
+    required: false
+
+outputs:
+  environment-url:
+    description: 'The URL of the deployed environment'
+  environment-id:
+    description: 'The ID of the environment'
+  environment-status:
+    description: 'The current status of the environment'
+  environment-health:
+    description: 'The health status of the environment'
+  deployment-action-type:
+    description: 'Whether environment was created or updated'
+  version-label:
+    description: 'The version label that was deployed'
+
+runs:
+  using: 'node24'
+  main: 'dist/index.js'
