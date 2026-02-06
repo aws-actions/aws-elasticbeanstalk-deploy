@@ -6,7 +6,6 @@ import { AWSClients } from './aws-clients';
 export declare const MAX_DEPLOYMENT_PACKAGE_SIZE_BYTES: number;
 /**
  * Validate that option-settings contains required IAM roles when creating an environment.
- * Note: JSON format validation is already done in validations.ts
  */
 export declare function validateOptionSettingsForCreate(optionSettingsJson: string | undefined): void;
 /**
@@ -69,8 +68,6 @@ export declare function updateEnvironment(clients: AWSClients, applicationName: 
  * Create a new environment
  */
 export declare function createEnvironment(clients: AWSClients, applicationName: string, environmentName: string, versionLabel: string, optionSettingsJson: string, solutionStackName: string | undefined, platformArn: string | undefined, maxRetries: number, retryDelay: number): Promise<void>;
-/**
- * Verify IAM roles exist
 /**
  * Get environment information
  */

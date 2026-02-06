@@ -99508,13 +99508,11 @@ const validations_1 = __nccwpck_require__(5215);
 exports.MAX_DEPLOYMENT_PACKAGE_SIZE_BYTES = 500 * 1024 * 1024;
 /**
  * Validate that option-settings contains required IAM roles when creating an environment.
- * Note: JSON format validation is already done in validations.ts
  */
 function validateOptionSettingsForCreate(optionSettingsJson) {
     if (!optionSettingsJson) {
         throw new Error('option-settings is required when creating a new environment. Must include IamInstanceProfile and ServiceRole.');
     }
-    // JSON parsing already validated in validations.ts
     const parsedSettings = JSON.parse(optionSettingsJson);
     let hasIamInstanceProfile = false;
     let hasServiceRole = false;
@@ -99693,7 +99691,7 @@ exports.verifyBucketOwnership = verifyBucketOwnership;
  * Upload deployment package to S3
  */
 async function uploadToS3(clients, region, accountId, applicationName, versionLabel, packagePath, maxRetries, retryDelay, createBucketIfNotExists, customBucketName) {
-    const bucket = customBucketName || `${applicationName}-${accountId}`;
+    const bucket = customBucketName || `elasticbeanstalk-${region}-${accountId}`;
     const packageExtension = path.extname(packagePath);
     const key = `${applicationName}/${versionLabel}${packageExtension}`;
     // Validate deployment package size
@@ -99841,8 +99839,6 @@ async function createEnvironment(clients, applicationName, environmentName, vers
     core.info(`✅ Environment creation initiated for ${environmentName}`);
 }
 exports.createEnvironment = createEnvironment;
-/**
- * Verify IAM roles exist
 /**
  * Get environment information
  */
@@ -100129,7 +100125,6 @@ const core = __importStar(__nccwpck_require__(37484));
 const client_elastic_beanstalk_1 = __nccwpck_require__(76114);
 /**
  * Fetch recent environment events for debugging and check for fatal/error events
- * Returns error information if fatal/error events are found
  * Only displays events newer than lastSeenEventDate to avoid duplicates
  * Only shows events that occurred after deploymentStartTime to filter out old events
  */
@@ -100142,9 +100137,6 @@ async function describeRecentEvents(clients, applicationName, environmentName, l
         });
         const response = await clients.getElasticBeanstalkClient().send(command);
         if (response.Events && response.Events.length > 0) {
-            // Filter to only events relevant to this deployment:
-            // 1. Events after deploymentStartTime (if provided)
-            // 2. Events after lastSeenEventDate (to avoid duplicates)
             const newEvents = response.Events.filter((event) => {
                 const eventDate = event.EventDate;
                 if (!eventDate)
@@ -100160,7 +100152,7 @@ async function describeRecentEvents(clients, applicationName, environmentName, l
                 return true;
             });
             if (newEvents.length > 0) {
-                // Only show header on first call (when lastSeenEventDate is undefined)
+                // Only show header on first call
                 if (!lastSeenEventDate) {
                     core.info('📋 Recent events:');
                 }
@@ -100170,7 +100162,6 @@ async function describeRecentEvents(clients, applicationName, environmentName, l
                     const dateB = b.EventDate?.getTime() || 0;
                     return dateA - dateB;
                 });
-                // Track fatal/error events while displaying all events
                 const fatalOrErrorEvents = [];
                 let mostRecentDate;
                 sortedEvents.forEach((event) => {
@@ -100195,7 +100186,6 @@ async function describeRecentEvents(clients, applicationName, environmentName, l
                         core.info(`  [${timestamp}] ${severity}: ${message}`);
                     }
                 });
-                // Return error information if fatal/error events were found
                 if (fatalOrErrorEvents.length > 0) {
                     const errorMessage = fatalOrErrorEvents[0].message || 'Unknown error occurred';
                     return { hasError: true, errorMessage, lastEventDate: mostRecentDate };
@@ -100203,12 +100193,10 @@ async function describeRecentEvents(clients, applicationName, environmentName, l
                 return { hasError: false, lastEventDate: mostRecentDate };
             }
         }
-        // If no new events, return the last seen date (or undefined if first call)
         return { hasError: false, lastEventDate: lastSeenEventDate };
     }
     catch (error) {
-        // If we can't fetch events, don't fail the deployment check
-        // Just log and continue
+        // If we can't fetch events, just log and continue
         core.debug(`Failed to fetch events: ${error}`);
         return { hasError: false, lastEventDate: lastSeenEventDate };
     }
@@ -100243,8 +100231,6 @@ async function waitForDeploymentCompletion(clients, applicationName, environment
             // Check for fatal/error events during deployment
             // This prevents getting stuck when errors occur during deployment
             const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
-            // Update last seen event date for next iteration
-            // Always update, even if undefined (preserves the state)
             lastSeenEventDate = eventCheck.lastEventDate;
             if (eventCheck.hasError) {
                 throw new Error(`Environment deployment failed - fatal or error event detected: ${eventCheck.errorMessage}`);
@@ -100255,7 +100241,6 @@ async function waitForDeploymentCompletion(clients, applicationName, environment
                 previousStatus = status;
             }
         }
-        // Wait based on deployment action type
         await new Promise(resolve => setTimeout(resolve, pollInterval));
     }
     // Timeout occurred - fetch events to help diagnose
@@ -100283,51 +100268,33 @@ async function waitForHealthRecovery(clients, applicationName, environmentName, 
             const env = response.Environments[0];
             const health = env.Health;
             const status = env.Status;
-            // Only check for fatal/error events when health is Grey
-            // This prevents getting stuck when errors occur during deployment
-            // before health status changes to Red
-            if (health === 'Grey' || health === undefined) {
-                const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
-                // Update last seen event date for next iteration
-                // Always update, even if undefined (preserves the state)
-                lastSeenEventDate = eventCheck.lastEventDate;
-                if (eventCheck.hasError) {
-                    throw new Error(`Environment deployment failed - fatal or error event detected: ${eventCheck.errorMessage}`);
-                }
-            }
             if (health === 'Green' || health === 'Yellow') {
                 core.info('✅ Environment is healthy!');
                 return;
             }
-            // Check for errors if health is Red (regardless of status)
-            // This catches errors even when status is still Updating
-            if (health === 'Red') {
+            if (health === 'Grey' || health === undefined || health === 'Red') {
                 const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
-                // Update last seen event date
                 if (eventCheck.lastEventDate) {
                     lastSeenEventDate = eventCheck.lastEventDate;
                 }
                 if (eventCheck.hasError) {
-                    throw new Error(`Environment deployment failed - fatal or error event detected: ${eventCheck.errorMessage}`);
+                    throw new Error(`Environment health recovery failed - fatal or error event detected: ${eventCheck.errorMessage}`);
                 }
-                // If status is Ready and health is Red, deployment failed
-                if (status === 'Ready') {
-                    throw new Error('Environment deployment failed - health is Red');
+                if (health === 'Red' && status === 'Ready') {
+                    throw new Error('Environment health recovery failed - health is Red');
                 }
             }
-            // Only log when status or health changes
             if (status !== previousStatus || health !== previousHealth) {
                 core.info(`Current status: ${status}, health: ${health}`);
                 previousStatus = status;
                 previousHealth = health;
             }
         }
-        // Wait 15 seconds before checking again
         await new Promise(resolve => setTimeout(resolve, 15000));
     }
     // Timeout occurred - fetch events to help diagnose
     await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
-    throw new Error(`Environment health check timed out after ${timeout}s`);
+    throw new Error(`Environment health recovery timed out after ${timeout}s`);
 }
 exports.waitForHealthRecovery = waitForHealthRecovery;
 
@@ -100489,7 +100456,7 @@ function validateOptionalInputs() {
         core.setFailed(`Version label must be between 1 and 100 characters, got ${applicationVersionLabel.length}`);
         return { valid: false };
     }
-    // Validate option-settings is valid JSON array if provided (IAM validation happens at runtime)
+    // Validate option-settings is valid JSON array if provided
     if (optionSettings) {
         try {
             const parsed = JSON.parse(optionSettings);
@@ -100548,7 +100515,7 @@ function checkInputConflicts(inputs) {
     // Check if create-s3-bucket-if-not-exists is false
     if (inputs.createS3BucketIfNotExists === false) {
         core.warning('create-s3-bucket-if-not-exists is false. If the S3 bucket does not exist, deployment will fail. ' +
-            'Ensure the bucket exists: <elasticbeanstalk-<region>-<account-id>');
+            'Ensure the bucket exists: elasticbeanstalk-<region>-<account-id>');
     }
 }
 function validateAllInputs() {

@@ -332,7 +332,7 @@ describe('Main Functions', () => {
           ]
         });
       await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1))
-        .rejects.toThrow('Environment deployment failed - health is Red');
+        .rejects.toThrow('Environment health recovery failed - health is Red');
     });
 
     it('should timeout', async () => {
@@ -346,7 +346,7 @@ describe('Main Functions', () => {
         });
       });
       await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1))
-        .rejects.toThrow('Environment health check timed out after 1s');
+        .rejects.toThrow('Environment health recovery timed out after 1s');
     });
   });
 

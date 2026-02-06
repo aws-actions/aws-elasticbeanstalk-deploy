@@ -21,14 +21,12 @@ export const MAX_DEPLOYMENT_PACKAGE_SIZE_BYTES = 500 * 1024 * 1024;
 
 /**
  * Validate that option-settings contains required IAM roles when creating an environment.
- * Note: JSON format validation is already done in validations.ts
  */
 export function validateOptionSettingsForCreate(optionSettingsJson: string | undefined): void {
   if (!optionSettingsJson) {
     throw new Error('option-settings is required when creating a new environment. Must include IamInstanceProfile and ServiceRole.');
   }
 
-  // JSON parsing already validated in validations.ts
   const parsedSettings = JSON.parse(optionSettingsJson);
 
   let hasIamInstanceProfile = false;
@@ -275,7 +273,7 @@ export async function uploadToS3(
   createBucketIfNotExists: boolean,
   customBucketName?: string
 ): Promise<{ bucket: string; key: string }> {
-  const bucket = customBucketName || `${applicationName}-${accountId}`;
+  const bucket = customBucketName || `elasticbeanstalk-${region}-${accountId}`;
   const packageExtension = path.extname(packagePath);
   const key = `${applicationName}/${versionLabel}${packageExtension}`;
 
@@ -512,8 +510,6 @@ export async function createEnvironment(
   core.info(`✅ Environment creation initiated for ${environmentName}`);
 }
 
-/**
- * Verify IAM roles exist
 /**
  * Get environment information
  */

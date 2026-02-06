@@ -93,7 +93,7 @@ describe('S3 Operations', () => {
       const result = await uploadToS3(mockClients, 'us-east-1', '123456789012', 'my-app', 'v1.0.0', 'app.zip', 3, 1, false);
 
       expect(result).toEqual({
-        bucket: 'my-app-123456789012',
+        bucket: 'elasticbeanstalk-us-east-1-123456789012',
         key: 'my-app/v1.0.0.zip',
       });
       expect(mockSend).toHaveBeenCalled();
@@ -112,7 +112,7 @@ describe('S3 Operations', () => {
       const result = await uploadToS3(mockClients, 'us-west-2', '987654321098', 'app', 'abc123', 'deploy.jar', 3, 1, false);
 
       expect(result).toEqual({
-        bucket: 'app-987654321098',
+        bucket: 'elasticbeanstalk-us-west-2-987654321098',
         key: 'app/abc123.jar',
       });
     });
@@ -129,7 +129,7 @@ describe('S3 Operations', () => {
 
       const result = await uploadToS3(mockClients, 'eu-west-1', '111222333444', 'test-app', 'v2.0.0', 'package.zip', 3, 1, false);
 
-      expect(result.bucket).toBe('test-app-111222333444');
+      expect(result.bucket).toBe('elasticbeanstalk-eu-west-1-111222333444');
     });
   });
 
@@ -305,7 +305,7 @@ describe('S3 Operations', () => {
       const result = await uploadToS3(mockClients, 'us-west-2', '123456789012', 'my-app', 'v2.0.0', 'valid-app.zip', 3, 1, false);
 
       expect(result).toEqual({
-        bucket: 'my-app-123456789012',
+        bucket: 'elasticbeanstalk-us-west-2-123456789012',
         key: 'my-app/v2.0.0.zip',
       });
       expect(mockSend).toHaveBeenCalledTimes(2); // GetBucketAcl + PutObject
@@ -325,7 +325,7 @@ describe('S3 Operations', () => {
       const result = await uploadToS3(mockClients, 'eu-west-1', '987654321098', 'test-app', 'v1.0.0', 'exact-app.zip', 3, 1, false);
 
       expect(result).toEqual({
-        bucket: 'test-app-987654321098',
+        bucket: 'elasticbeanstalk-eu-west-1-987654321098',
         key: 'test-app/v1.0.0.zip',
       });
       expect(mockSend).toHaveBeenCalledTimes(2); // GetBucketAcl + PutObject

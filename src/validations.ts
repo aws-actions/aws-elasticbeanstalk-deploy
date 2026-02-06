@@ -170,7 +170,7 @@ function validateOptionalInputs() {
     return { valid: false };
   }
 
-  // Validate option-settings is valid JSON array if provided (IAM validation happens at runtime)
+  // Validate option-settings is valid JSON array if provided
   if (optionSettings) {
     try {
       const parsed = JSON.parse(optionSettings);
@@ -244,7 +244,7 @@ function checkInputConflicts(inputs: Partial<Inputs>): void {
   if (inputs.createS3BucketIfNotExists === false) {
     core.warning(
       'create-s3-bucket-if-not-exists is false. If the S3 bucket does not exist, deployment will fail. ' +
-      'Ensure the bucket exists: <elasticbeanstalk-<region>-<account-id>'
+      'Ensure the bucket exists: elasticbeanstalk-<region>-<account-id>'
     );
   }
 }
