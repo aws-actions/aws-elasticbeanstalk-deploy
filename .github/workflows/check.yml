@@ -1,0 +1,24 @@
+on:
+  pull_request:
+    branches: [ main ]
+
+name: Check
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+      - name: Run tests
+        run: |
+          npm ci
+          npm test
+          npm run build

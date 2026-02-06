@@ -1,0 +1,86 @@
+name: Release with Artifact Attestation
+
+on:
+  push:
+    tags:
+      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+
+permissions:
+  contents: write      # Create releases
+  attestations: write  # Generate attestations
+  id-token: write     # OIDC token for provenance
+
+jobs:
+  build-and-release:
+    name: Build, Attest, and Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build action
+        run: npm run build
+
+      - name: Generate SHA256 hash
+        run: |
+          sha256sum dist/index.js > dist/index.js.sha256
+          sha256sum action.yml > action.yml.sha256
+          echo "Generated SHA256 hashes:"
+          cat dist/index.js.sha256
+          cat action.yml.sha256
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/index.js
+            action.yml
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## AWS Elastic Beanstalk Deploy Action ${{ github.ref_name }}
+            
+            This release includes artifact attestations for supply chain security.
+            
+            ### Security Features
+            - ✅ SLSA Build Provenance attached to key artifacts
+            - ✅ Artifact integrity verified with SHA256 checksums
+            - ✅ Build environment attestation included
+            
+            ### Verification Methods
+            
+            **Using GitHub CLI (Recommended):**
+            ```bash
+            gh attestation verify dist/index.js --repo ${{ github.repository }}
+            gh attestation verify action.yml --repo ${{ github.repository }}
+            ```
+            
+            **Using SHA256 checksums:**
+            ```bash
+            # Download the files and verify against the .sha256 files
+            sha256sum -c dist/index.js.sha256
+            sha256sum -c action.yml.sha256
+            ```
+            
+            See the [CHANGELOG](./CHANGELOG.md) for detailed changes in this release.
+          draft: false
+          prerelease: false
+          files: |
+            dist/index.js.sha256
+            action.yml.sha256
+          generate_release_notes: true

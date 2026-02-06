@@ -2,9 +2,11 @@
   "name": "aws-elasticbeanstalk-deploy",
   "version": "0.1.0",
   "description": "Deploy applications to AWS Elastic Beanstalk",
-  "license": "UNLICENSED",
-  "repository": "ssh://git.amazon.com/pkg/EBDeployGithubAction",
-  "homepage": "https://code.amazon.com/packages/EBDeployGithubAction",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aws-actions/aws-elasticbeanstalk-deploy.git"
+  },
+  "homepage": "https://github.com/aws-actions/aws-elasticbeanstalk-deploy",
   "engines": {
     "node": ">=24"
   },
@@ -51,5 +53,9 @@
     "jest": "^29.7.0",
     "ts-jest": "^29.2.4",
     "typescript": "~5.4.5"
+  },
+  "overrides": {
+    "fast-xml-parser": "5.3.4",
+    "undici": "6.23.0"
   }
 }
