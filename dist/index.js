@@ -100125,8 +100125,6 @@ const core = __importStar(__nccwpck_require__(37484));
 const client_elastic_beanstalk_1 = __nccwpck_require__(76114);
 /**
  * Fetch recent environment events for debugging and check for fatal/error events
- * Only displays events newer than lastSeenEventDate to avoid duplicates
- * Only shows events that occurred after deploymentStartTime to filter out old events
  */
 async function describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime) {
     try {
@@ -100229,7 +100227,6 @@ async function waitForDeploymentCompletion(clients, applicationName, environment
                 return finalEvents.lastEventDate || lastSeenEventDate;
             }
             // Check for fatal/error events during deployment
-            // This prevents getting stuck when errors occur during deployment
             const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
             lastSeenEventDate = eventCheck.lastEventDate;
             if (eventCheck.hasError) {
