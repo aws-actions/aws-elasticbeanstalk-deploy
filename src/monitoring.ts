@@ -7,8 +7,6 @@ import { AWSClients } from './aws-clients';
 
 /**
  * Fetch recent environment events for debugging and check for fatal/error events
- * Only displays events newer than lastSeenEventDate to avoid duplicates
- * Only shows events that occurred after deploymentStartTime to filter out old events
  */
 async function describeRecentEvents(
   clients: AWSClients,
@@ -147,7 +145,6 @@ export async function waitForDeploymentCompletion(
       }
 
       // Check for fatal/error events during deployment
-      // This prevents getting stuck when errors occur during deployment
       const eventCheck = await describeRecentEvents(
         clients,
         applicationName,

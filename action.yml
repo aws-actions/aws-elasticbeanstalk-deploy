@@ -61,7 +61,7 @@ inputs:
     required: false
     default: 'true'
   s3-bucket-name:
-    description: 'S3 bucket name for deployment packages (defaults to {applicationName}-{accountId})'
+    description: 'S3 bucket name for deployment packages (defaults to elasticbeanstalk-{region}-{accountId})'
     required: false
   exclude-patterns:
     description: 'Comma-separated list of patterns to exclude from deployment package (e.g., "*.git*,*node_modules*,*.env*")'

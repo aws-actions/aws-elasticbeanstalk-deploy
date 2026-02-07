@@ -200,7 +200,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy to Elastic Beanstalk
-        uses: varsharagavendran/aws-elasticbeanstalk-deploy@main
+        uses: aws-actions/aws-elasticbeanstalk-deploy@v1.0.0
         with:
           aws-region: ${{ env.AWS_REGION }}
           application-name: ${{ env.APPLICATION_NAME }}
@@ -250,7 +250,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy to Elastic Beanstalk
-        uses: varsharagavendran/aws-elasticbeanstalk-deploy@main
+        uses: aws-actions/aws-elasticbeanstalk-deploy@v1.0.0
         with:
           aws-region: ${{ env.AWS_REGION }}
           application-name: ${{ env.APPLICATION_NAME }}
