@@ -89,7 +89,68 @@ Whether you're using an IAM role (OIDC) or IAM user (static credentials), attach
 
 **1. Elastic Beanstalk Permissions**
 
+You have two options for granting Elastic Beanstalk permissions:
+
+**Option A: AWS Managed Policy (Simplest)**
+
 Attach the AWS managed policy **`AdministratorAccess-AWSElasticBeanstalk`**. This policy grants the permissions that Elastic Beanstalk requires from the calling principal to create and manage environments, including interactions with EC2, Auto Scaling, CloudFormation, and other services that Elastic Beanstalk orchestrates during deployment.
+
+**Option B: Scoped-Down Custom Policy (Recommended for Production)**
+
+For tighter security, create a custom IAM policy with only the permissions your deployment requires. Below is an example policy that you can customize by removing or restricting permissions based on your needs (e.g., scope `secretsmanager:*` to specific secrets or remove it entirely if not used):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "elasticbeanstalk:*",
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:ListBucket",
+        "ec2:DescribeInstances",
+        "ec2:DescribeInstanceStatus",
+        "ec2:DescribeSecurityGroups",
+        "elasticloadbalancing:DescribeTargetHealth",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "autoscaling:DescribeAutoScalingGroups",
+        "autoscaling:DescribeScalingActivities",
+        "cloudwatch:GetMetricStatistics",
+        "logs:GetLogEvents",
+        "acm:ListCertificates",
+        "acm:DescribeCertificate",
+        "acm:RequestCertificate",
+        "route53:ListHostedZones",
+        "route53:ListResourceRecordSets",
+        "route53:ChangeResourceRecordSets",
+        "route53:GetChange",
+        "secretsmanager:*",
+        "ssm:GetParameter",
+        "ssm:GetParametersByPath",
+        "ssm:PutParameter",
+        "ssm:DescribeParameters",
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBSnapshots",
+        "rds:CreateDBSnapshot",
+        "rds:DescribePendingMaintenanceActions",
+        "ce:GetCostAndUsage",
+        "ce:GetCostForecast",
+        "sns:CreateTopic",
+        "sns:Subscribe",
+        "sns:ListTopics",
+        "iam:GetRole",
+        "iam:GetInstanceProfile"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+> **Note:** Review and adjust the permissions above based on your actual requirements. Remove services you don't use (e.g., `rds:*` if not using RDS, `secretsmanager:*` if not using Secrets Manager) and scope `Resource` to specific ARNs where possible for enhanced security.
 
 **2. S3 Bucket Permissions**
 
