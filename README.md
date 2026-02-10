@@ -97,7 +97,7 @@ Attach the AWS managed policy **`AdministratorAccess-AWSElasticBeanstalk`**. Thi
 
 **Option B: Scoped-Down Custom Policy (Recommended for Production)**
 
-For tighter security, create a custom IAM policy with only the permissions your deployment requires. Below is an example policy that you can customize by removing or restricting permissions based on your needs (e.g., scope `secretsmanager:*` to specific secrets or remove it entirely if not used):
+For tighter security, create a custom IAM policy with only the permissions your deployment requires. Below is an example policy that you can customize by adding, removing or restricting permissions based on your needs (e.g., scope `secretsmanager:*` to specific secrets or remove it entirely if not used):
 
 ```json
 {
@@ -397,7 +397,7 @@ This enables managed platform updates and configures Elastic Beanstalk to automa
 | `deployment-timeout` | Maximum wait time for deployment (seconds, 60-3600) | `900` |
 | `max-retries` | Maximum retry attempts for failed API calls (0-10) | `2` |
 | `retry-delay` | Initial delay between retries in seconds (1-60, uses exponential backoff) | `5` |
-| `use-existing-application-version-if-available` | Reuse existing application version if it exists (skips S3 upload) | `true` |
+| `use-existing-application-version-if-available` | Reuse existing application version if it exists (skips S3 upload and application version creation) | `true` |
 | `create-s3-bucket-if-not-exists` | Create S3 bucket if it doesn't exist | `true` |
 | `s3-bucket-name` | Custom S3 bucket name for deployment packages | `elasticbeanstalk-{region}-{accountId}` |
 | `exclude-patterns` | Comma-separated glob patterns to exclude from auto-created packages | None |
