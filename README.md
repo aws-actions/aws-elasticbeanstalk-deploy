@@ -453,3 +453,4 @@ This project is licensed under the MIT-0 License. See [LICENSE](LICENSE) for det
 - [Configuration Options Reference](https://docs.aws.amazon.com/elasticbeanstalk/latest/dg/command-options-general.html)
 - [Platform Versions](https://docs.aws.amazon.com/elasticbeanstalk/latest/platforms/)
 - [configure-aws-credentials Action](https://github.com/aws-actions/configure-aws-credentials)
+- [AdministratorAccess-AWSElasticBeanstalk](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AdministratorAccess-AWSElasticBeanstalk.html)
