@@ -14,25 +14,39 @@ export async function createDeploymentPackage(
   versionLabel: string,
   excludePatternsInput: string
 ): Promise<{ path: string }> {
-  let finalPath: string;
+  if (packagePath) {
+    // deployment-package-path explicitly provided by user
+    if (!fs.existsSync(packagePath)) {
+      throw new Error(
+        `deployment-package-path '${packagePath}' does not exist. ` +
+        'Either provide a valid file path or omit deployment-package-path to have the action create a package automatically.'
+      );
+    }
 
-  if (packagePath && fs.existsSync(packagePath)) {
+    const stats = fs.statSync(packagePath);
+    if (!stats.isFile()) {
+      throw new Error(
+        `deployment-package-path '${packagePath}' is not a file. ` +
+        'It must point to an existing deployment archive file (e.g., .zip, .war).'
+      );
+    }
+
     core.info(`📦 Using existing deployment package: ${packagePath}`);
-    finalPath = packagePath;
-  } else {
-    const zipFileName = `deploy-${versionLabel}.zip`;
-    core.info(`📦 Creating deployment package: ${zipFileName}`);
-
-    const excludePatterns = excludePatternsInput
-      .split(',')
-      .map(p => p.trim())
-      .filter(p => p.length > 0);
-
-    await createZipFile(zipFileName, excludePatterns);
-    finalPath = zipFileName;
+    return { path: packagePath };
   }
 
-  return { path: finalPath };
+  // No explicit package path provided – create a new deployment package from the workspace.
+  const zipFileName = `deploy-${versionLabel}.zip`;
+  core.info(`📦 Creating deployment package: ${zipFileName}`);
+
+  const excludePatterns = excludePatternsInput
+    .split(',')
+    .map(p => p.trim())
+    .filter(p => p.length > 0);
+
+  await createZipFile(zipFileName, excludePatterns);
+
+  return { path: zipFileName };
 }
 
 /**

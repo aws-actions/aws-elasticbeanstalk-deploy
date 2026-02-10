@@ -162,6 +162,7 @@ describe('Main Functions', () => {
   describe('createDeploymentPackage', () => {
     it('should use existing package', async () => {
       mockedFs.existsSync.mockReturnValue(true);
+      mockedFs.statSync.mockReturnValue({ isFile: () => true } as any);
       mockedFs.readFileSync.mockReturnValue(Buffer.from('test'));
       const result = await createDeploymentPackage('/existing.zip', 'v1.0.0', '*.git*');
 
@@ -187,6 +188,27 @@ describe('Main Functions', () => {
         ignore: ['*.git*', '*.node*'] 
       });
       expect(mockArchiveInstance.finalize).toHaveBeenCalled();
+    });
+
+    it('should fail when deployment-package-path does not exist', async () => {
+      mockedFs.existsSync.mockReturnValue(false);
+
+      await expect(
+        createDeploymentPackage('/does/not/exist.zip', 'v1.0.0', '*.git*')
+      ).rejects.toThrow(
+        "deployment-package-path '/does/not/exist.zip' does not exist."
+      );
+    });
+
+    it('should fail when deployment-package-path is a directory', async () => {
+      mockedFs.existsSync.mockReturnValue(true);
+      mockedFs.statSync.mockReturnValue({ isFile: () => false } as any);
+
+      await expect(
+        createDeploymentPackage('/some/directory', 'v1.0.0', '*.git*')
+      ).rejects.toThrow(
+        "deployment-package-path '/some/directory' is not a file."
+      );
     });
   });
 
