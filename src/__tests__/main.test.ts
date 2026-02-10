@@ -234,6 +234,17 @@ describe('Main Functions', () => {
       await expect(retryWithBackoff(mockFn, 2, 1, 'Test'))
         .rejects.toThrow('Test failed after 2 attempts: fail');
     });
+
+    it('should not retry on access denied errors', async () => {
+      const errorMessage = "You do not have permission to perform the 'ec2:DescribeImages' action.";
+      const mockFn = jest.fn().mockRejectedValue(new Error(errorMessage));
+
+      await expect(retryWithBackoff(mockFn, 3, 1, 'Create environment'))
+        .rejects.toThrow(errorMessage);
+
+      // Ensure we only attempted once (no retries)
+      expect(mockFn).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('getAwsAccountId', () => {

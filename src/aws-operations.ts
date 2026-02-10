@@ -101,7 +101,19 @@ export async function retryWithBackoff<T>(
     try {
       return await fn();
     } catch (error) {
-      lastError = error as Error;
+      const err = error as Error & { name?: string; $metadata?: { httpStatusCode?: number } };
+      const message = err.message || '';
+
+      // non-retryable authorization/permission errors - fail fast
+      const isAuthError =
+        /accessdenied|access denied|not authorized|unauthorizedoperation|you do not have permission/i.test(message) ||
+        err.name === 'AccessDeniedException' ||
+        err.name === 'UnauthorizedOperation';
+      if (isAuthError) {
+        throw err;
+      }
+
+      lastError = err;
 
       if (attempt < maxRetries) {
         const delay = retryDelay * Math.pow(2, attempt - 1);

@@ -1,7 +1,6 @@
 import { ElasticBeanstalkClient } from '@aws-sdk/client-elastic-beanstalk';
 import { S3Client } from '@aws-sdk/client-s3';
 import { STSClient } from '@aws-sdk/client-sts';
-import { IAMClient } from '@aws-sdk/client-iam';
 /**
  * Manages AWS SDK clients as singletons to avoid recreating instances
  * for every operation.
@@ -11,7 +10,6 @@ export declare class AWSClients {
     private readonly ebClient;
     private readonly s3Client;
     private readonly stsClient;
-    private readonly iamClient;
     private constructor();
     /**
      * Get or create AWSClients instance for a specific region
@@ -24,5 +22,4 @@ export declare class AWSClients {
     getElasticBeanstalkClient(): ElasticBeanstalkClient;
     getS3Client(): S3Client;
     getSTSClient(): STSClient;
-    getIAMClient(): IAMClient;
 }
