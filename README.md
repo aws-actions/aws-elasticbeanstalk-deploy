@@ -97,7 +97,7 @@ Attach the AWS managed policy **[`AdministratorAccess-AWSElasticBeanstalk`](http
 
 **Option B: Scoped-Down Custom Policy (Recommended for Production)**
 
-For tighter security, it's recommended to scope down the permissions in the [`AdministratorAccess-AWSElasticBeanstalk`](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AdministratorAccess-AWSElasticBeanstalk.html) managed policy based on your specific needs. Start with the AWS managed policy as a baseline and remove unnecessary permissions or restrict resources to only what your deployment requires. This approach ensures you maintain the core functionality while following the principle of least privilege.
+For tighter security, it's recommended to scope down the permissions in the [`AdministratorAccess-AWSElasticBeanstalk`](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AdministratorAccess-AWSElasticBeanstalk.html) managed policy based on your specific needs. Start with the AWS managed policy as a baseline and restrict resources to only what your deployment requires. This approach ensures you maintain the core functionality while following the principle of least privilege.
 
 **2. S3 Bucket Permissions**
 
