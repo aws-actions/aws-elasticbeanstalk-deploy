@@ -29,12 +29,7 @@ function validateRequiredInputs() {
   const solutionStackName = core.getInput('solution-stack-name') || undefined;
   const platformArn = core.getInput('platform-arn') || undefined;
 
-  // Validate that either solution-stack-name OR platform-arn is provided, but not both
-  if (!solutionStackName && !platformArn) {
-    core.setFailed('Either solution-stack-name or platform-arn must be provided');
-    return { valid: false };
-  }
-
+  // Validate that both solution-stack-name AND platform-arn are not provided together
   if (solutionStackName && platformArn) {
     core.setFailed('Cannot specify both solution-stack-name and platform-arn. Use only one.');
     return { valid: false };

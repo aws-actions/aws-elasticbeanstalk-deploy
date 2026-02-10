@@ -500,5 +500,68 @@ describe('Main Functions', () => {
 
       expect(mockedCore.setFailed).toHaveBeenCalledWith('Deployment failed: Environment test-env does not exist and create-environment-if-not-exists is false');
     });
+
+    it('should fail create environment when no platform configuration is provided', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'create-environment-if-not-exists') return true;
+        return false;
+      });
+
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'version-label': 'v1.0.0',
+          // no solution-stack-name
+          // no platform-arn
+          'deployment-timeout': '900',
+          'max-retries': '3',
+          'retry-delay': '5',
+          'exclude-patterns': '*.git*',
+          'option-settings': JSON.stringify([
+            {
+              Namespace: 'aws:autoscaling:launchconfiguration',
+              OptionName: 'IamInstanceProfile',
+              Value: 'test-profile',
+            },
+            {
+              Namespace: 'aws:elasticbeanstalk:environment',
+              OptionName: 'ServiceRole',
+              Value: 'test-role',
+            },
+          ]),
+        };
+        return inputs[name] || '';
+      });
+
+      // Mock sequence where environment does not exist
+      mockSend.mockImplementation(() => {
+        const callCount = mockSend.mock.calls.length + 1;
+
+        if (callCount === 1) return Promise.resolve({ Account: '123456789012' }); // GetCallerIdentity
+        if (callCount === 2) return Promise.resolve({ ApplicationVersions: [] }); // DescribeApplicationVersions
+        if (callCount === 3) return Promise.resolve({}); // HeadBucket
+        if (callCount === 4) return Promise.resolve({
+          Owner: { ID: 'owner-id' },
+          Grants: [{
+            Grantee: { Type: 'CanonicalUser', ID: 'owner-id' },
+            Permission: 'FULL_CONTROL',
+          }],
+        }); // GetBucketAcl
+        if (callCount === 5) return Promise.resolve({}); // PutObject
+        if (callCount === 6) return Promise.resolve({}); // CreateAppVersion
+        if (callCount === 7) return Promise.resolve({ Environments: [] }); // DescribeEnvironment (no env found)
+
+        return Promise.resolve({});
+      });
+
+      await run();
+
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(
+        'Deployment failed: Either solution-stack-name or platform-arn must be provided when creating a new environment',
+      );
+    });
   });
 });

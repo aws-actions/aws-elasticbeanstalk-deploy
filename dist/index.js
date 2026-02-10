@@ -100043,6 +100043,10 @@ async function run() {
             }
             // Validate option-settings with IAM roles are provided when creating environment
             (0, aws_operations_1.validateOptionSettingsForCreate)(optionSettings);
+            // When creating a new environment, either solution-stack-name or platform-arn must be provided
+            if (!solutionStackName && !platformArn) {
+                throw new Error('Either solution-stack-name or platform-arn must be provided when creating a new environment');
+            }
             core.startGroup('🆕 Creating new environment');
             await (0, aws_operations_1.createEnvironment)(clients, applicationName, environmentName, applicationVersionLabel, optionSettings, solutionStackName, platformArn, maxRetries, retryDelay);
             deploymentActionType = 'create';
@@ -100335,11 +100339,7 @@ function validateRequiredInputs() {
     const environmentName = core.getInput('environment-name', { required: true });
     const solutionStackName = core.getInput('solution-stack-name') || undefined;
     const platformArn = core.getInput('platform-arn') || undefined;
-    // Validate that either solution-stack-name OR platform-arn is provided, but not both
-    if (!solutionStackName && !platformArn) {
-        core.setFailed('Either solution-stack-name or platform-arn must be provided');
-        return { valid: false };
-    }
+    // Validate that both solution-stack-name AND platform-arn are not provided together
     if (solutionStackName && platformArn) {
         core.setFailed('Cannot specify both solution-stack-name and platform-arn. Use only one.');
         return { valid: false };

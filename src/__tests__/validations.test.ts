@@ -407,7 +407,7 @@ describe('Validation Functions', () => {
       expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('Invalid JSON in option-settings:'));
     });
 
-    it('should fail validation when neither solution-stack-name nor platform-arn is provided', () => {
+    it('should pass validation when neither solution-stack-name nor platform-arn is provided as this is checked during createEnvironment function', () => {
       const validOptionSettings = JSON.stringify([
         {
           "Namespace": "aws:autoscaling:launchconfiguration",
@@ -426,7 +426,7 @@ describe('Validation Functions', () => {
           'aws-region': 'us-east-1',
           'application-name': 'test-app',
           'environment-name': 'test-env',
-          'option-settings': validOptionSettings,
+          'option-settings': validOptionSettings, // Neither solution-stack-name nor platform-arn provided
         };
         return inputs[name] || '';
       });
@@ -434,8 +434,9 @@ describe('Validation Functions', () => {
 
       const result = validateAllInputs();
 
-      expect(result.valid).toBe(false);
-      expect(mockedCore.setFailed).toHaveBeenCalledWith('Either solution-stack-name or platform-arn must be provided');
+      expect(result.valid).toBe(true);
+      expect(result.solutionStackName).toBeUndefined();
+      expect(result.platformArn).toBeUndefined();
     });
 
     it('should fail validation when both solution-stack-name and platform-arn are provided', () => {
@@ -699,8 +700,9 @@ describe('Validation Functions', () => {
 
       const result = validateAllInputs();
 
-      expect(result.valid).toBe(false);
-      expect(mockedCore.setFailed).toHaveBeenCalledWith('Either solution-stack-name or platform-arn must be provided');
+      // Empty platform ARN should be treated as undefined and not cause failure here
+      expect(result.valid).toBe(true);
+      expect(result.platformArn).toBeUndefined();
     });
   });
 

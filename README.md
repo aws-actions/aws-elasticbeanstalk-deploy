@@ -281,14 +281,16 @@ jobs:
 | `application-name` | Elastic Beanstalk application name (1-100 characters) |
 | `environment-name` | Elastic Beanstalk environment name (4-40 characters, alphanumeric and hyphens only) |
 
-### Platform Configuration (One Required)
+### Platform Configuration (Required Only When Creating Environment)
 
-You must provide exactly one of the following:
+When **creating a new Elastic Beanstalk environment**, you must provide **exactly one** of the following:
 
 | Input | Description |
 |-------|-------------|
 | `solution-stack-name` | Solution stack name (e.g., `64bit Amazon Linux 2023 v4.3.0 running Python 3.11`) |
 | `platform-arn` | Platform ARN (e.g., `arn:aws:elasticbeanstalk:us-east-1::platform/Python 3.11 running on 64bit Amazon Linux 2023/4.3.0`) |
+
+When **deploying to an existing environment**, these inputs are **optional**. The existing environment's platform configuration will be used if neither is provided.
 
 ### Optional Inputs
 

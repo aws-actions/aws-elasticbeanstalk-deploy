@@ -137,6 +137,11 @@ export async function run(): Promise<void> {
       // Validate option-settings with IAM roles are provided when creating environment
       validateOptionSettingsForCreate(optionSettings);
 
+      // When creating a new environment, either solution-stack-name or platform-arn must be provided
+      if (!solutionStackName && !platformArn) {
+        throw new Error('Either solution-stack-name or platform-arn must be provided when creating a new environment');
+      }
+
       core.startGroup('🆕 Creating new environment');
       
       await createEnvironment(
