@@ -278,19 +278,17 @@ jobs:
 | Input | Description |
 |-------|-------------|
 | `aws-region` | AWS region for deployment (e.g., `us-east-1`, `eu-west-1`) |
-| `application-name` | Elastic Beanstalk application name |
-| `environment-name` | Elastic Beanstalk environment name |
+| `application-name` | Elastic Beanstalk application name (1-100 characters) |
+| `environment-name` | Elastic Beanstalk environment name (4-40 characters, alphanumeric and hyphens only) |
 
-### Platform Configuration (Required Only When Creating Environment)
+### Platform Configuration (One Required)
 
-When **creating a new Elastic Beanstalk environment**, you must provide **exactly one** of the following:
+You must provide exactly one of the following:
 
 | Input | Description |
 |-------|-------------|
 | `solution-stack-name` | Solution stack name (e.g., `64bit Amazon Linux 2023 v4.3.0 running Python 3.11`) |
 | `platform-arn` | Platform ARN (e.g., `arn:aws:elasticbeanstalk:us-east-1::platform/Python 3.11 running on 64bit Amazon Linux 2023/4.3.0`) |
-
-When **deploying to an existing environment**, these inputs are **optional**. The existing environment's platform configuration will be used if neither is provided.
 
 ### Optional Inputs
 
@@ -306,7 +304,7 @@ When **deploying to an existing environment**, these inputs are **optional**. Th
 | `deployment-timeout` | Maximum wait time for deployment (seconds, 60-3600) | `900` |
 | `max-retries` | Maximum retry attempts for failed API calls (0-10) | `2` |
 | `retry-delay` | Initial delay between retries in seconds (1-60, uses exponential backoff) | `5` |
-| `use-existing-application-version-if-available` | Controls whether to reuse an existing application version for the given `version-label`. When `true`, the action will **reuse** an existing Elastic Beanstalk application version if it already exists (skipping S3 upload and version creation). When `false`, the action will attempt to **create a new application version** for the specified `version-label`. If a version with that label already exists, deployment will fail with `Application Version <label> already exists`, so you must use a unique `version-label` per deployment when this is set to `false`. | `true` |
+| `use-existing-application-version-if-available` | Reuse existing application version if it exists (skips S3 upload) | `true` |
 | `create-s3-bucket-if-not-exists` | Create S3 bucket if it doesn't exist | `true` |
 | `s3-bucket-name` | Custom S3 bucket name for deployment packages | `elasticbeanstalk-{region}-{accountId}` |
 | `exclude-patterns` | Comma-separated glob patterns to exclude from auto-created packages | None |
@@ -376,6 +374,10 @@ aws elasticbeanstalk list-available-solution-stacks --region us-east-1 | grep -i
 **"option-settings must include IamInstanceProfile"**
 
 When creating a new environment, you must provide IAM roles in `option-settings`. See [Option Settings](#option-settings).
+
+**"Environment name must be 4-40 characters"**
+
+Environment names must be 4-40 characters, contain only alphanumeric characters and hyphens, and cannot start or end with a hyphen.
 
 **S3 Access Denied**
 
