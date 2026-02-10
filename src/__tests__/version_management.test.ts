@@ -166,5 +166,27 @@ describe('Version Management', () => {
 
       expect(mockSend).toHaveBeenCalled();
     });
+
+    it('should fail fast when application version already exists', async () => {
+      const existingVersionError = new Error('Application Version v1.0.0 already exists.');
+      (existingVersionError as any).name = 'InvalidParameterValueException';
+
+      mockSend.mockRejectedValue(existingVersionError);
+
+      await expect(
+        createApplicationVersion(
+          mockClients,
+          'my-app',
+          'v1.0.0',
+          'my-bucket',
+          'my-app/v1.0.0.zip',
+          3,
+          1,
+          false
+        )
+      ).rejects.toThrow('Application Version v1.0.0 already exists.');
+
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
   });
 });

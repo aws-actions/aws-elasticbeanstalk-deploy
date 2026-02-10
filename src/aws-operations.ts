@@ -109,7 +109,13 @@ export async function retryWithBackoff<T>(
         /accessdenied|access denied|not authorized|unauthorizedoperation|you do not have permission/i.test(message) ||
         err.name === 'AccessDeniedException' ||
         err.name === 'UnauthorizedOperation';
-      if (isAuthError) {
+
+      // non-retryable EB application version already-exists errors - fail fast
+      const isAppVersionExistsError =
+        /application version .* already exists/i.test(message) ||
+        (err.name === 'InvalidParameterValueException' && /already exists/i.test(message));
+
+      if (isAuthError || isAppVersionExistsError) {
         throw err;
       }
 

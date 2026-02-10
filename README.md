@@ -306,7 +306,7 @@ When **deploying to an existing environment**, these inputs are **optional**. Th
 | `deployment-timeout` | Maximum wait time for deployment (seconds, 60-3600) | `900` |
 | `max-retries` | Maximum retry attempts for failed API calls (0-10) | `2` |
 | `retry-delay` | Initial delay between retries in seconds (1-60, uses exponential backoff) | `5` |
-| `use-existing-application-version-if-available` | Reuse existing application version if it exists (skips S3 upload) | `true` |
+| `use-existing-application-version-if-available` | Controls whether to reuse an existing application version for the given `version-label`. When `true`, the action will **reuse** an existing Elastic Beanstalk application version if it already exists (skipping S3 upload and version creation). When `false`, the action will attempt to **create a new application version** for the specified `version-label`. If a version with that label already exists, deployment will fail with `Application Version <label> already exists`, so you must use a unique `version-label` per deployment when this is set to `false`. | `true` |
 | `create-s3-bucket-if-not-exists` | Create S3 bucket if it doesn't exist | `true` |
 | `s3-bucket-name` | Custom S3 bucket name for deployment packages | `elasticbeanstalk-{region}-{accountId}` |
 | `exclude-patterns` | Comma-separated glob patterns to exclude from auto-created packages | None |
