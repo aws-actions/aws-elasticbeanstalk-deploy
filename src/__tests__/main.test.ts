@@ -162,6 +162,7 @@ describe('Main Functions', () => {
   describe('createDeploymentPackage', () => {
     it('should use existing package', async () => {
       mockedFs.existsSync.mockReturnValue(true);
+      mockedFs.statSync.mockReturnValue({ isFile: () => true } as any);
       mockedFs.readFileSync.mockReturnValue(Buffer.from('test'));
       const result = await createDeploymentPackage('/existing.zip', 'v1.0.0', '*.git*');
 
@@ -188,6 +189,27 @@ describe('Main Functions', () => {
       });
       expect(mockArchiveInstance.finalize).toHaveBeenCalled();
     });
+
+    it('should fail when deployment-package-path does not exist', async () => {
+      mockedFs.existsSync.mockReturnValue(false);
+
+      await expect(
+        createDeploymentPackage('/does/not/exist.zip', 'v1.0.0', '*.git*')
+      ).rejects.toThrow(
+        "deployment-package-path '/does/not/exist.zip' does not exist."
+      );
+    });
+
+    it('should fail when deployment-package-path is a directory', async () => {
+      mockedFs.existsSync.mockReturnValue(true);
+      mockedFs.statSync.mockReturnValue({ isFile: () => false } as any);
+
+      await expect(
+        createDeploymentPackage('/some/directory', 'v1.0.0', '*.git*')
+      ).rejects.toThrow(
+        "deployment-package-path '/some/directory' is not a file."
+      );
+    });
   });
 
   describe('retryWithBackoff', () => {
@@ -211,6 +233,17 @@ describe('Main Functions', () => {
       const mockFn = jest.fn().mockRejectedValue(new Error('fail'));
       await expect(retryWithBackoff(mockFn, 2, 1, 'Test'))
         .rejects.toThrow('Test failed after 2 attempts: fail');
+    });
+
+    it('should not retry on access denied errors', async () => {
+      const errorMessage = "You do not have permission to perform the 'ec2:DescribeImages' action.";
+      const mockFn = jest.fn().mockRejectedValue(new Error(errorMessage));
+
+      await expect(retryWithBackoff(mockFn, 3, 1, 'Create environment'))
+        .rejects.toThrow(errorMessage);
+
+      // Ensure we only attempted once (no retries)
+      expect(mockFn).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -499,6 +532,69 @@ describe('Main Functions', () => {
       await run();
 
       expect(mockedCore.setFailed).toHaveBeenCalledWith('Deployment failed: Environment test-env does not exist and create-environment-if-not-exists is false');
+    });
+
+    it('should fail create environment when no platform configuration is provided', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'create-environment-if-not-exists') return true;
+        return false;
+      });
+
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'version-label': 'v1.0.0',
+          // no solution-stack-name
+          // no platform-arn
+          'deployment-timeout': '900',
+          'max-retries': '3',
+          'retry-delay': '5',
+          'exclude-patterns': '*.git*',
+          'option-settings': JSON.stringify([
+            {
+              Namespace: 'aws:autoscaling:launchconfiguration',
+              OptionName: 'IamInstanceProfile',
+              Value: 'test-profile',
+            },
+            {
+              Namespace: 'aws:elasticbeanstalk:environment',
+              OptionName: 'ServiceRole',
+              Value: 'test-role',
+            },
+          ]),
+        };
+        return inputs[name] || '';
+      });
+
+      // Mock sequence where environment does not exist
+      mockSend.mockImplementation(() => {
+        const callCount = mockSend.mock.calls.length + 1;
+
+        if (callCount === 1) return Promise.resolve({ Account: '123456789012' }); // GetCallerIdentity
+        if (callCount === 2) return Promise.resolve({ ApplicationVersions: [] }); // DescribeApplicationVersions
+        if (callCount === 3) return Promise.resolve({}); // HeadBucket
+        if (callCount === 4) return Promise.resolve({
+          Owner: { ID: 'owner-id' },
+          Grants: [{
+            Grantee: { Type: 'CanonicalUser', ID: 'owner-id' },
+            Permission: 'FULL_CONTROL',
+          }],
+        }); // GetBucketAcl
+        if (callCount === 5) return Promise.resolve({}); // PutObject
+        if (callCount === 6) return Promise.resolve({}); // CreateAppVersion
+        if (callCount === 7) return Promise.resolve({ Environments: [] }); // DescribeEnvironment (no env found)
+
+        return Promise.resolve({});
+      });
+
+      await run();
+
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(
+        'Deployment failed: Either solution-stack-name or platform-arn must be provided when creating a new environment',
+      );
     });
   });
 });

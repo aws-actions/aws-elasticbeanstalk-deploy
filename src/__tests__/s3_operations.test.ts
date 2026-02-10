@@ -190,20 +190,18 @@ describe('S3 Operations', () => {
       expect(mockSend).toHaveBeenCalledTimes(4); // HeadBucket + 2 CreateBucket attempts + GetBucketAcl
     });
 
-    it('should bubble up AccessDenied permissions error', async () => {
+    it('should bubble up AccessDenied permissions error without retrying', async () => {
       const accessDeniedError = new Error('Access Denied');
       accessDeniedError.name = 'AccessDenied';
       
       mockSend
         .mockRejectedValueOnce(new Error('NoSuchBucket')) // HeadBucketCommand throws error (bucket doesn't exist)
-        .mockRejectedValueOnce(accessDeniedError) // CreateBucketCommand attempt 1 fails with AccessDenied
-        .mockRejectedValueOnce(accessDeniedError) // CreateBucketCommand attempt 2 fails with AccessDenied
-        .mockRejectedValueOnce(accessDeniedError); // CreateBucketCommand attempt 3 fails with AccessDenied
+        .mockRejectedValueOnce(accessDeniedError); // First CreateBucketCommand fails with AccessDenied
 
       await expect(createS3Bucket(mockClients, 'us-east-1', 'permission-denied-bucket', '123456789012', 3, 1))
-        .rejects.toThrow('Create S3 bucket failed after 3 attempts: Access Denied');
+        .rejects.toThrow('Access Denied');
 
-      expect(mockSend).toHaveBeenCalledTimes(4); // 1 HeadBucket + 3 CreateBucket attempts
+      expect(mockSend).toHaveBeenCalledTimes(2); // 1 HeadBucket + 1 CreateBucket (no retries on AccessDenied)
     });
 
     it('should bubble up BucketAlreadyExists error', async () => {
@@ -237,7 +235,7 @@ describe('S3 Operations', () => {
   });
 
   describe('uploadToS3 permissions errors', () => {
-    it('should bubble up S3 upload permissions error', async () => {
+    it('should bubble up S3 upload permissions error without retrying', async () => {
       const uploadError = new Error('Access Denied');
       uploadError.name = 'AccessDenied';
       
@@ -248,13 +246,12 @@ describe('S3 Operations', () => {
           Owner: { ID: 'owner-id' },
           Grants: [{ Grantee: { ID: 'owner-id' }, Permission: 'WRITE' }]
         })
-        .mockRejectedValueOnce(uploadError) // PutObject attempt 1 fails
-        .mockRejectedValueOnce(uploadError); // PutObject attempt 2 fails
+        .mockRejectedValueOnce(uploadError); // First PutObject attempt fails with non-retryable AccessDenied
 
       await expect(uploadToS3(mockClients, 'us-east-1', '123456789012', 'my-app', 'v1.0.0', 'app.zip', 2, 1, false))
-        .rejects.toThrow('Upload to S3 failed after 2 attempts: Access Denied');
+        .rejects.toThrow('Access Denied');
 
-      expect(mockSend).toHaveBeenCalledTimes(3); // 1 GetBucketAcl + 2 PutObject attempts
+      expect(mockSend).toHaveBeenCalledTimes(2); // 1 GetBucketAcl + 1 PutObject
     });
 
     it('should bubble up S3 NoSuchBucket error during upload', async () => {

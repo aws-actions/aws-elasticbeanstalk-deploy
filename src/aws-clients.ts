@@ -1,7 +1,6 @@
 import { ElasticBeanstalkClient } from '@aws-sdk/client-elastic-beanstalk';
 import { S3Client } from '@aws-sdk/client-s3';
 import { STSClient } from '@aws-sdk/client-sts';
-import { IAMClient } from '@aws-sdk/client-iam';
 
 /**
  * Manages AWS SDK clients as singletons to avoid recreating instances
@@ -13,13 +12,11 @@ export class AWSClients {
   private readonly ebClient: ElasticBeanstalkClient;
   private readonly s3Client: S3Client;
   private readonly stsClient: STSClient;
-  private readonly iamClient: IAMClient;
 
   private constructor(region: string) {
     this.ebClient = new ElasticBeanstalkClient({ region });
     this.s3Client = new S3Client({ region });
     this.stsClient = new STSClient({ region });
-    this.iamClient = new IAMClient({ region });
   }
 
   /**
@@ -49,9 +46,5 @@ export class AWSClients {
 
   public getSTSClient(): STSClient {
     return this.stsClient;
-  }
-
-  public getIAMClient(): IAMClient {
-    return this.iamClient;
   }
 }

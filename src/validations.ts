@@ -29,12 +29,7 @@ function validateRequiredInputs() {
   const solutionStackName = core.getInput('solution-stack-name') || undefined;
   const platformArn = core.getInput('platform-arn') || undefined;
 
-  // Validate that either solution-stack-name OR platform-arn is provided, but not both
-  if (!solutionStackName && !platformArn) {
-    core.setFailed('Either solution-stack-name or platform-arn must be provided');
-    return { valid: false };
-  }
-
+  // Validate that both solution-stack-name AND platform-arn are not provided together
   if (solutionStackName && platformArn) {
     core.setFailed('Cannot specify both solution-stack-name and platform-arn. Use only one.');
     return { valid: false };
@@ -44,44 +39,6 @@ function validateRequiredInputs() {
   const regionPattern = /^[a-z]{2}-[a-z]+-\d{1}$/;
   if (!regionPattern.test(awsRegion)) {
     core.setFailed(`Invalid AWS region format: ${awsRegion}. Expected format like 'us-east-1'`);
-    return { valid: false };
-  }
-
-  // Validate platform ARN format if provided
-  if (platformArn) {
-    const platformArnPattern = /^arn:aws:elasticbeanstalk:[a-z0-9-]+::platform\/.+$/;
-    if (!platformArnPattern.test(platformArn)) {
-      core.setFailed(`Invalid platform ARN format: ${platformArn}. Expected format like 'arn:aws:elasticbeanstalk:us-east-1::platform/Python 3.11 running on 64bit Amazon Linux 2023/4.3.0'`);
-      return { valid: false };
-    }
-
-    // Extract region from platform ARN and validate it matches the aws-region input
-    const arnParts = platformArn.split(':');
-    if (arnParts.length >= 4) {
-      const platformRegion = arnParts[3];
-      if (platformRegion !== awsRegion) {
-        core.setFailed(`Platform ARN region (${platformRegion}) does not match aws-region input (${awsRegion})`);
-        return { valid: false };
-      }
-    }
-  }
-
-  // Elastic Beanstalk application name constraints
-  if (applicationName.length < 1 || applicationName.length > 100) {
-    core.setFailed(`Application name must be between 1 and 100 characters, got ${applicationName.length}`);
-    return { valid: false };
-  }
-
-  // Elastic Beanstalk environment name constraints
-  if (environmentName.length < 4 || environmentName.length > 40) {
-    core.setFailed(`Environment name must be between 4 and 40 characters, got ${environmentName.length}`);
-    return { valid: false };
-  }
-
-  // Environment name must contain only alphanumeric and hyphens
-  const envNamePattern = /^[a-zA-Z0-9-]+$/;
-  if (!envNamePattern.test(environmentName)) {
-    core.setFailed(`Environment name can only contain alphanumeric characters and hyphens, got: ${environmentName}`);
     return { valid: false };
   }
 
@@ -164,12 +121,6 @@ function validateOptionalInputs() {
   const s3BucketName = core.getInput('s3-bucket-name') || undefined;
   const optionSettings = core.getInput('option-settings') || undefined;
 
-  // Validate version label length
-  if (applicationVersionLabel.length < 1 || applicationVersionLabel.length > 100) {
-    core.setFailed(`Version label must be between 1 and 100 characters, got ${applicationVersionLabel.length}`);
-    return { valid: false };
-  }
-
   // Validate option-settings is valid JSON array if provided
   if (optionSettings) {
     try {
@@ -240,11 +191,12 @@ function checkInputConflicts(inputs: Partial<Inputs>): void {
     );
   }
 
-  // Check if create-s3-bucket-if-not-exists is false
-  if (inputs.createS3BucketIfNotExists === false) {
+  // Check if create-s3-bucket-if-not-exists is false without a custom bucket name
+  if (inputs.createS3BucketIfNotExists === false && !inputs.s3BucketName) {
     core.warning(
-      'create-s3-bucket-if-not-exists is false. If the S3 bucket does not exist, deployment will fail. ' +
-      'Ensure the bucket exists: elasticbeanstalk-<region>-<account-id>'
+      'create-s3-bucket-if-not-exists is false and no custom s3-bucket-name was provided. ' +
+      'The action will use the default Elastic Beanstalk bucket elasticbeanstalk-<region>-<account-id>. ' +
+      'If that bucket does not exist or is not writable, deployment will fail. Either create the default bucket or set s3-bucket-name to an existing bucket.'
     );
   }
 }
