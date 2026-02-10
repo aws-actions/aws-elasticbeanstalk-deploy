@@ -100350,23 +100350,6 @@ function validateRequiredInputs() {
         core.setFailed(`Invalid AWS region format: ${awsRegion}. Expected format like 'us-east-1'`);
         return { valid: false };
     }
-    // Validate platform ARN format if provided
-    if (platformArn) {
-        const platformArnPattern = /^arn:aws:elasticbeanstalk:[a-z0-9-]+::platform\/.+$/;
-        if (!platformArnPattern.test(platformArn)) {
-            core.setFailed(`Invalid platform ARN format: ${platformArn}. Expected format like 'arn:aws:elasticbeanstalk:us-east-1::platform/Python 3.11 running on 64bit Amazon Linux 2023/4.3.0'`);
-            return { valid: false };
-        }
-        // Extract region from platform ARN and validate it matches the aws-region input
-        const arnParts = platformArn.split(':');
-        if (arnParts.length >= 4) {
-            const platformRegion = arnParts[3];
-            if (platformRegion !== awsRegion) {
-                core.setFailed(`Platform ARN region (${platformRegion}) does not match aws-region input (${awsRegion})`);
-                return { valid: false };
-            }
-        }
-    }
     // Elastic Beanstalk application name constraints
     if (applicationName.length < 1 || applicationName.length > 100) {
         core.setFailed(`Application name must be between 1 and 100 characters, got ${applicationName.length}`);
