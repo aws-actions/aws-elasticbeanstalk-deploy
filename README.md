@@ -213,7 +213,7 @@ See: [Managing Elastic Beanstalk Service Roles](https://docs.aws.amazon.com/elas
 
 ### Step 4: Add GitHub Secrets
 
-Add the following secrets to your GitHub repository (Settings → Secrets and variables → Actions):
+Add the following secrets to your GitHub repository (Settings → Secrets and variables → Actions → Repository secrets):
 
 **If using OIDC:**
 
@@ -229,6 +229,8 @@ Add the following secrets to your GitHub repository (Settings → Secrets and va
 | `AWS_SECRET_ACCESS_KEY` | Secret access key for your IAM user |
 
 ## Quick Start
+
+Create a workflow file in your repository at `.github/workflows/deploy-to-elastic-beanstalk.yml` (or any name you prefer under `.github/workflows/`), then follow the examples below for file contents.
 
 ### Using OIDC (Recommended)
 
@@ -339,17 +341,46 @@ jobs:
 | Input | Description |
 |-------|-------------|
 | `aws-region` | AWS region for deployment (e.g., `us-east-1`, `eu-west-1`) |
-| `application-name` | Elastic Beanstalk application name (1-100 characters) |
-| `environment-name` | Elastic Beanstalk environment name (4-40 characters, alphanumeric and hyphens only) |
+| `application-name` | Elastic Beanstalk application name |
+| `environment-name` | Elastic Beanstalk environment name |
 
-### Platform Configuration (One Required)
+### Platform Configuration (Required Only When Creating Environment)
 
-You must provide exactly one of the following:
+When **creating a new Elastic Beanstalk environment**, you must provide **exactly one** of the following:
 
 | Input | Description |
 |-------|-------------|
 | `solution-stack-name` | Solution stack name (e.g., `64bit Amazon Linux 2023 v4.3.0 running Python 3.11`) |
 | `platform-arn` | Platform ARN (e.g., `arn:aws:elasticbeanstalk:us-east-1::platform/Python 3.11 running on 64bit Amazon Linux 2023/4.3.0`) |
+
+You can find the list of supported platforms and example values in the AWS Elastic Beanstalk documentation for [supported platforms](https://docs.aws.amazon.com/elasticbeanstalk/latest/platforms/platforms-supported.html).
+
+**Managed platform updates caveats:**
+
+- **Solution stack names** and **versioned platform ARNs** (e.g.`/4.3.0`) pin your environment to a specific platform version. Managed platform updates will **not** automatically move you to newer major/minor platform versions—you must update the solution stack name or ARN yourself.  
+- If you want Elastic Beanstalk to automatically apply managed platform updates within a platform branch, prefer using a **platform ARN that refers to a platform branch** (without a fixed version) as described in the AWS documentation above.
+
+To use **managed platform updates**, see the AWS docs for [managed updates](https://docs.aws.amazon.com/elasticbeanstalk/latest/dg/environment-platform-update-managed.html) and configure the following `option-settings` in your workflow:
+
+```yaml
+option-settings: |
+  [
+    {
+      "Namespace": "aws:elasticbeanstalk:managedactions",
+      "OptionName": "ManagedActionsEnabled",
+      "Value": "true"
+    },
+    {
+      "Namespace": "aws:elasticbeanstalk:managedactions:platformupdate",
+      "OptionName": "UpdateLevel",
+      "Value": "minor"
+    }
+  ]
+```
+
+This enables managed platform updates and configures Elastic Beanstalk to automatically apply **minor** platform version updates.
+
+When **deploying to an existing environment**, these inputs are **optional**. The existing environment's platform configuration will be used if neither is provided.
 
 ### Optional Inputs
 
@@ -435,10 +466,6 @@ aws elasticbeanstalk list-available-solution-stacks --region us-east-1 | grep -i
 **"option-settings must include IamInstanceProfile"**
 
 When creating a new environment, you must provide IAM roles in `option-settings`. See [Option Settings](#option-settings).
-
-**"Environment name must be 4-40 characters"**
-
-Environment names must be 4-40 characters, contain only alphanumeric characters and hyphens, and cannot start or end with a hyphen.
 
 **S3 Access Denied**
 
