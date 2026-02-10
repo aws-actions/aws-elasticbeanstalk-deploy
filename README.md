@@ -350,15 +350,18 @@ When **creating a new Elastic Beanstalk environment**, you must provide **exactl
 
 | Input | Description |
 |-------|-------------|
-| `solution-stack-name` | Solution stack name (e.g., `64bit Amazon Linux 2023 v4.3.0 running Python 3.11`) |
-| `platform-arn` | Platform ARN (e.g., `arn:aws:elasticbeanstalk:us-east-1::platform/Python 3.11 running on 64bit Amazon Linux 2023/4.3.0`) |
+| `solution-stack-name` | Solution stack name (e.g., `64bit Amazon Linux 2023 v4.9.2 running Python 3.14`) |
+| `platform-arn` | Platform ARN (e.g., `arn:aws:elasticbeanstalk:us-east-1::platform/Python 3.14 running on 64bit Amazon Linux 2023/4.9.2`) |
 
 You can find the list of supported platforms and example values in the AWS Elastic Beanstalk documentation for [supported platforms](https://docs.aws.amazon.com/elasticbeanstalk/latest/platforms/platforms-supported.html).
 
-**Managed platform updates caveats:**
+When **deploying to an existing environment**, these inputs are **optional**. The existing environment's platform configuration will be used if neither is provided.
 
-- **Solution stack names** and **versioned platform ARNs** (e.g.`/4.3.0`) pin your environment to a specific platform version. Managed platform updates will **not** automatically move you to newer major/minor platform versions—you must update the solution stack name or ARN yourself.  
-- If you want Elastic Beanstalk to automatically apply managed platform updates within a platform branch, prefer using a **platform ARN that refers to a platform branch** (without a fixed version) as described in the AWS documentation above.
+> [!IMPORTANT]
+> When you specify `solution-stack-name` or `platform-arn`, each deployment updates your environment to that platform version if it differs from the current one. To deploy without changing the platform version, omit both options.
+
+> [!TIP]
+> Platform branch ARNs (without a version suffix, e.g., `arn:aws:elasticbeanstalk:::platform/Python 3.14 running on 64bit Amazon Linux 2023`) automatically select the latest version within that branch at deployment time.
 
 To use **managed platform updates**, see the AWS docs for [managed updates](https://docs.aws.amazon.com/elasticbeanstalk/latest/dg/environment-platform-update-managed.html) and configure the following `option-settings` in your workflow:
 
@@ -378,9 +381,7 @@ option-settings: |
   ]
 ```
 
-This enables managed platform updates and configures Elastic Beanstalk to automatically apply **minor** platform version updates.
-
-When **deploying to an existing environment**, these inputs are **optional**. The existing environment's platform configuration will be used if neither is provided.
+This enables managed platform updates and configures Elastic Beanstalk to automatically apply **minor** and **patch** platform version updates.
 
 ### Optional Inputs
 
