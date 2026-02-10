@@ -132,7 +132,7 @@ describe('Input Conflict Detection', () => {
     );
   });
 
-  it('should warn when create-s3-bucket-if-not-exists is false', () => {
+  it('should warn when create-s3-bucket-if-not-exists is false and no custom bucket is provided', () => {
     const validOptionSettings = JSON.stringify([
       {
         "Namespace": "aws:autoscaling:launchconfiguration",
@@ -213,11 +213,47 @@ describe('Input Conflict Detection', () => {
     );
   });
 
-  it('should not warn when inputs are valid and compatible', () => {
+  it('should not warn about default bucket when custom s3-bucket-name is provided with create-s3-bucket-if-not-exists false', () => {
+    const validOptionSettings = JSON.stringify([
+      {
+        "Namespace": "aws:autoscaling:launchconfiguration",
+        "OptionName": "IamInstanceProfile",
+        "Value": "test-profile"
+      },
+      {
+        "Namespace": "aws:elasticbeanstalk:environment",
+        "OptionName": "ServiceRole",
+        "Value": "test-role"
+      }
+    ]);
+
+    mockedCore.getInput.mockImplementation((name: string) => {
+      const inputs: Record<string, string> = {
+        'aws-region': 'us-east-1',
+        'application-name': 'test-app',
+        'environment-name': 'test-env',
+        'solution-stack-name': '64bit Amazon Linux 2023',
+        'deployment-timeout': '900',
+        'max-retries': '3',
+        'retry-delay': '5',
+        'create-s3-bucket-if-not-exists': 'false',
+        's3-bucket-name': 'my-custom-bucket',
+        'option-settings': validOptionSettings,
+      };
+      return inputs[name] || '';
+    });
+
+    mockedCore.getBooleanInput.mockImplementation((name: string) => {
+      if (name === 'create-s3-bucket-if-not-exists') return false;
+      return true;
+    });
+
     validateAllInputs();
-    const warningCalls = mockedCore.warning.mock.calls.filter(call =>
-      typeof call[0] === 'string' && (call[0].includes('conflict') || call[0].includes('incompatible'))
+
+    // No warning about the default bucket should be emitted in this case
+    const bucketWarnings = mockedCore.warning.mock.calls.filter(call =>
+      typeof call[0] === 'string' && call[0].includes('create-s3-bucket-if-not-exists is false')
     );
-    expect(warningCalls).toHaveLength(0);
+    expect(bucketWarnings).toHaveLength(0);
   });
 });

@@ -100350,22 +100350,6 @@ function validateRequiredInputs() {
         core.setFailed(`Invalid AWS region format: ${awsRegion}. Expected format like 'us-east-1'`);
         return { valid: false };
     }
-    // Elastic Beanstalk application name constraints
-    if (applicationName.length < 1 || applicationName.length > 100) {
-        core.setFailed(`Application name must be between 1 and 100 characters, got ${applicationName.length}`);
-        return { valid: false };
-    }
-    // Elastic Beanstalk environment name constraints
-    if (environmentName.length < 4 || environmentName.length > 40) {
-        core.setFailed(`Environment name must be between 4 and 40 characters, got ${environmentName.length}`);
-        return { valid: false };
-    }
-    // Environment name must contain only alphanumeric and hyphens
-    const envNamePattern = /^[a-zA-Z0-9-]+$/;
-    if (!envNamePattern.test(environmentName)) {
-        core.setFailed(`Environment name can only contain alphanumeric characters and hyphens, got: ${environmentName}`);
-        return { valid: false };
-    }
     return {
         valid: true,
         awsRegion,
@@ -100431,11 +100415,6 @@ function validateOptionalInputs() {
     const excludePatterns = core.getInput('exclude-patterns') || '';
     const s3BucketName = core.getInput('s3-bucket-name') || undefined;
     const optionSettings = core.getInput('option-settings') || undefined;
-    // Validate version label length
-    if (applicationVersionLabel.length < 1 || applicationVersionLabel.length > 100) {
-        core.setFailed(`Version label must be between 1 and 100 characters, got ${applicationVersionLabel.length}`);
-        return { valid: false };
-    }
     // Validate option-settings is valid JSON array if provided
     if (optionSettings) {
         try {
@@ -100492,10 +100471,11 @@ function checkInputConflicts(inputs) {
     if (inputs.maxRetries === 0) {
         core.warning('max-retries is set to 0. API calls will not be retried on failure, which may cause transient errors to fail the deployment.');
     }
-    // Check if create-s3-bucket-if-not-exists is false
-    if (inputs.createS3BucketIfNotExists === false) {
-        core.warning('create-s3-bucket-if-not-exists is false. If the S3 bucket does not exist, deployment will fail. ' +
-            'Ensure the bucket exists: elasticbeanstalk-<region>-<account-id>');
+    // Check if create-s3-bucket-if-not-exists is false without a custom bucket name
+    if (inputs.createS3BucketIfNotExists === false && !inputs.s3BucketName) {
+        core.warning('create-s3-bucket-if-not-exists is false and no custom s3-bucket-name was provided. ' +
+            'The action will use the default Elastic Beanstalk bucket elasticbeanstalk-<region>-<account-id>. ' +
+            'If that bucket does not exist or is not writable, deployment will fail. Either create the default bucket or set s3-bucket-name to an existing bucket.');
     }
 }
 function validateAllInputs() {

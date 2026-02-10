@@ -278,8 +278,8 @@ jobs:
 | Input | Description |
 |-------|-------------|
 | `aws-region` | AWS region for deployment (e.g., `us-east-1`, `eu-west-1`) |
-| `application-name` | Elastic Beanstalk application name (1-100 characters) |
-| `environment-name` | Elastic Beanstalk environment name (4-40 characters, alphanumeric and hyphens only) |
+| `application-name` | Elastic Beanstalk application name |
+| `environment-name` | Elastic Beanstalk environment name |
 
 ### Platform Configuration (Required Only When Creating Environment)
 
@@ -376,10 +376,6 @@ aws elasticbeanstalk list-available-solution-stacks --region us-east-1 | grep -i
 **"option-settings must include IamInstanceProfile"**
 
 When creating a new environment, you must provide IAM roles in `option-settings`. See [Option Settings](#option-settings).
-
-**"Environment name must be 4-40 characters"**
-
-Environment names must be 4-40 characters, contain only alphanumeric characters and hyphens, and cannot start or end with a hyphen.
 
 **S3 Access Denied**
 
