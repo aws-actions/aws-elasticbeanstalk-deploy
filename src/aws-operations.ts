@@ -348,13 +348,10 @@ export async function createS3Bucket(
   maxRetries: number,
   retryDelay: number
 ): Promise<void> {
-  let bucketExists = false;
-  
   try {
     core.info('🪣 Checking if S3 bucket exists');
     await clients.getS3Client().send(new HeadBucketCommand({ Bucket: bucket }));
     core.info('✅ S3 bucket exists');
-    bucketExists = true;
   } catch (_error) {
     core.info('🪣 S3 bucket does not exist, Creating S3 bucket');
 
