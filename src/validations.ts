@@ -121,6 +121,12 @@ function validateOptionalInputs() {
   const s3BucketName = core.getInput('s3-bucket-name') || undefined;
   const optionSettings = core.getInput('option-settings') || undefined;
 
+  // AWS enforces a 1–100 character limit on version labels
+  if (applicationVersionLabel.length < 1 || applicationVersionLabel.length > 100) {
+    core.setFailed(`version-label must be between 1 and 100 characters, got ${applicationVersionLabel.length}: "${applicationVersionLabel}"`);
+    return { valid: false };
+  }
+
   // Validate option-settings is valid JSON array if provided
   if (optionSettings) {
     try {

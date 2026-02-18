@@ -307,6 +307,46 @@ describe('Validation Functions', () => {
       expect(result.applicationVersionLabel).toBe('test-sha-123');
     });
 
+    it('should fail validation when version-label exceeds 100 characters', () => {
+      const longLabel = 'a'.repeat(101);
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'solution-stack-name': '64bit Amazon Linux 2',
+          'version-label': longLabel,
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(false);
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('version-label must be between 1 and 100 characters'));
+    });
+
+    it('should pass validation when version-label is exactly 100 characters', () => {
+      const exactLabel = 'a'.repeat(100);
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'solution-stack-name': '64bit Amazon Linux 2',
+          'version-label': exactLabel,
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(true);
+      expect(result.applicationVersionLabel).toBe(exactLabel);
+    });
+
     it('should fail validation for invalid JSON in option-settings', () => {
       mockedCore.getInput.mockImplementation((name: string) => {
         const inputs: Record<string, string> = {
