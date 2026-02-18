@@ -52,7 +52,7 @@
     "typescript": "~5.4.5"
   },
   "overrides": {
-    "fast-xml-parser": "5.3.4",
+    "fast-xml-parser": "5.3.6",
     "undici": "6.23.0"
   }
 }
