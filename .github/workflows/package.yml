@@ -25,8 +25,8 @@ jobs:
           npm run build
       - name: Commit
         run: |
-          git config --local user.email ${{ secrets.USER_EMAIL }}
-          git config --local user.name ${{ secrets.USER_NAME }}
+          git config --local user.email "${{ secrets.USER_EMAIL }}"
+          git config --local user.name "${{ secrets.USER_NAME }}"
           git add dist/
           git commit -m "(chore) updating dist" || echo "No changes to commit"
           git push origin HEAD:main
