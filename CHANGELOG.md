@@ -2,13 +2,6 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
-### <a name="1.0.1" href="https://github.com/aws-actions/aws-elasticbeanstalk-deploy/tree/v1.0.1">1.0.1 (2026-02-19)</a>
-
-#### Changes
-
-* Updated fast-xml-parser version
-
-
 ### <a name="1.0.0" href="https://github.com/aws-actions/aws-elasticbeanstalk-deploy/tree/v1.0.0">1.0.0 (2026-02-11)</a>
 
 #### Changes
