@@ -6,7 +6,7 @@ import {
 import { AWSClients } from './aws-clients';
 
 /**
- * Fetch recent environment events for debugging and check for fatal/error events
+ * Fetch recent environment events for debugging and check for fatal/error events.
  */
 async function describeRecentEvents(
   clients: AWSClients,
