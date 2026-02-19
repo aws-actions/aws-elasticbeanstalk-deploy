@@ -242,8 +242,14 @@ export async function environmentExists(
     core.info(`No environments found with name ${environmentName}`);
     return { exists: false };
   } catch (error) {
-    core.warning(`Error checking environment ${environmentName}: ${error}`);
-    return { exists: false };
+    const err = error as Error & { name?: string; $metadata?: { httpStatusCode?: number } };
+    const statusCode = err.$metadata?.httpStatusCode;
+    // Only treat "not found" responses as non-existent; rethrow real errors
+    // so callers receive a clear failure rather than a silent false negative.
+    if (statusCode === 404 || err.name === 'NoSuchEntityException') {
+      return { exists: false };
+    }
+    throw error;
   }
 }
 
