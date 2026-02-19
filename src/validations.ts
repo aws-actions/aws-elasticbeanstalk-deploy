@@ -36,7 +36,7 @@ function validateRequiredInputs() {
   }
 
   // Validate AWS region format (e.g., us-east-1, eu-west-2, us-gov-east-1)
-  const regionPattern = /^[a-z]{2,3}(-[a-z]+)+-\d+$/;
+  const regionPattern = /^(us(-gov)?|af|ap|ca|eu|il|me|sa)-(north|south|east|west|central|northeast|southeast|northwest|southwest)-\d$/;
   if (!regionPattern.test(awsRegion)) {
     core.setFailed(`Invalid AWS region format: ${awsRegion}. Expected format like 'us-east-1' or 'us-gov-east-1'`);
     return { valid: false };
