@@ -41,7 +41,7 @@ jobs:
         run: |
           BRANCH_NAME="chore/update-dist"
           git add dist/
-          if git diff --staged --quiet; then
+          if git diff --staged --quiet main -- dist/ ; then
             echo "No changes to commit"
           else
             git commit -m "(chore) updating dist"
