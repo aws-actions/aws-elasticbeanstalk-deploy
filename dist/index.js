@@ -91855,7 +91855,7 @@ const client_s3_1 = __nccwpck_require__(53711);
 const client_sts_1 = __nccwpck_require__(71695);
 /**
  * Manages AWS SDK clients as singletons to avoid recreating instances
- * for every operation.
+ * for every operation
  */
 class AWSClients {
     static instances = new Map();

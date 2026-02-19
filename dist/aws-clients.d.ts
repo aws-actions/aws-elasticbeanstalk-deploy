@@ -3,7 +3,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { STSClient } from '@aws-sdk/client-sts';
 /**
  * Manages AWS SDK clients as singletons to avoid recreating instances
- * for every operation.
+ * for every operation
  */
 export declare class AWSClients {
     private static instances;
