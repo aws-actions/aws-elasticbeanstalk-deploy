@@ -20,7 +20,7 @@ import { parseJsonInput } from './validations';
 export const MAX_DEPLOYMENT_PACKAGE_SIZE_BYTES = 500 * 1024 * 1024;
 
 /**
- * Validate that option-settings contains required IAM roles when creating an environment.
+ * Validate that option-settings contains required IAM roles when creating an environment
  */
 export function validateOptionSettingsForCreate(optionSettingsJson: string | undefined): void {
   if (!optionSettingsJson) {
