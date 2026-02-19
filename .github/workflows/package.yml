@@ -18,6 +18,18 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: main
+          fetch-depth: 0
+      - name: Setup branch
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          BRANCH_NAME="chore/update-dist"
+          if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH_NAME"; then
+            git checkout "$BRANCH_NAME"
+            git merge main --no-edit
+          else
+            git checkout -b "$BRANCH_NAME"
+          fi
       - name: Package
         run: |
           npm ci
@@ -27,15 +39,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          BRANCH_NAME="chore/update-dist"
           git add dist/
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            BRANCH_NAME="chore/update-dist-${{ github.run_id }}"
-            git checkout -b "$BRANCH_NAME"
             git commit -m "(chore) updating dist"
             git push origin "$BRANCH_NAME"
-            gh pr create --title "(chore) Update dist" --body "Automated PR to update the dist folder." --base main
+            if ! gh pr list --head "$BRANCH_NAME" --state open | grep -q .; then
+              gh pr create --title "(chore) Update dist" --body "Automated PR to update the dist folder." --base main
+            fi
           fi
