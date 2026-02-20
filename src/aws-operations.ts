@@ -97,7 +97,9 @@ export async function retryWithBackoff<T>(
 ): Promise<T> {
   let lastError: Error | undefined;
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  const totalAttempts = maxRetries + 1;
+
+  for (let attempt = 1; attempt <= totalAttempts; attempt++) {
     try {
       return await fn();
     } catch (error) {
@@ -121,15 +123,16 @@ export async function retryWithBackoff<T>(
 
       lastError = err;
 
-      if (attempt < maxRetries) {
+      if (attempt < totalAttempts) {
         const delay = retryDelay * Math.pow(2, attempt - 1);
-        core.warning(`❌ ${operationName} failed (attempt ${attempt}/${maxRetries}). Retrying in ${delay}s...`);
+        core.warning(`❌ ${operationName} failed (attempt ${attempt}/${totalAttempts}). Retrying in ${delay}s...`);
         await new Promise(resolve => setTimeout(resolve, delay * 1000));
       }
     }
   }
 
-  const errorMessage = `${operationName} failed after ${maxRetries} attempts: ${lastError?.message}`;
+  const retryWord = maxRetries === 1 ? 'retry' : 'retries';
+  const errorMessage = `${operationName} failed after ${totalAttempts} attempts (${maxRetries} ${retryWord}): ${lastError?.message}`;
   core.error(errorMessage);
   throw new Error(errorMessage);
 }

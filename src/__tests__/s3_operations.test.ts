@@ -184,30 +184,32 @@ describe('S3 Operations', () => {
     it('should bubble up BucketAlreadyExists error', async () => {
       const bucketExistsError = new Error('The requested bucket name is not available');
       bucketExistsError.name = 'BucketAlreadyExists';
-      
+
       mockSend
         .mockRejectedValueOnce(new Error('NoSuchBucket')) // HeadBucketCommand throws error (bucket doesn't exist)
-        .mockRejectedValueOnce(bucketExistsError) // CreateBucketCommand attempt 1 fails - bucket name taken by another account
-        .mockRejectedValueOnce(bucketExistsError); // CreateBucketCommand attempt 2 fails - bucket name still taken
+        .mockRejectedValueOnce(bucketExistsError) // CreateBucketCommand attempt 1 fails
+        .mockRejectedValueOnce(bucketExistsError) // CreateBucketCommand attempt 2 fails (retry 1)
+        .mockRejectedValueOnce(bucketExistsError); // CreateBucketCommand attempt 3 fails (retry 2)
 
       await expect(createS3Bucket(mockClients, 'eu-west-1', 'taken-bucket-name', '123456789012', 2, 1))
-        .rejects.toThrow('Create S3 bucket failed after 2 attempts: The requested bucket name is not available');
+        .rejects.toThrow('Create S3 bucket failed after 3 attempts (2 retries): The requested bucket name is not available');
 
-      expect(mockSend).toHaveBeenCalledTimes(3); // 1 HeadBucket + 2 CreateBucket attempts
+      expect(mockSend).toHaveBeenCalledTimes(4); // 1 HeadBucket + 3 CreateBucket attempts
     });
 
     it('should bubble up InvalidBucketName error', async () => {
       const invalidNameError = new Error('The specified bucket is not valid');
       invalidNameError.name = 'InvalidBucketName';
-      
+
       mockSend
         .mockRejectedValueOnce(new Error('NoSuchBucket')) // HeadBucketCommand throws error (bucket doesn't exist)
-        .mockRejectedValueOnce(invalidNameError); // CreateBucketCommand fails - invalid bucket name format
+        .mockRejectedValueOnce(invalidNameError) // CreateBucketCommand attempt 1 fails
+        .mockRejectedValueOnce(invalidNameError); // CreateBucketCommand attempt 2 fails (retry 1)
 
       await expect(createS3Bucket(mockClients, 'us-west-2', 'Invalid_Bucket_Name', '123456789012', 1, 1))
-        .rejects.toThrow('Create S3 bucket failed after 1 attempts: The specified bucket is not valid');
+        .rejects.toThrow('Create S3 bucket failed after 2 attempts (1 retry): The specified bucket is not valid');
 
-      expect(mockSend).toHaveBeenCalledTimes(2); // 1 HeadBucket + 1 CreateBucket attempt
+      expect(mockSend).toHaveBeenCalledTimes(3); // 1 HeadBucket + 2 CreateBucket attempts
     });
   });
 
@@ -235,13 +237,14 @@ describe('S3 Operations', () => {
       mockSend
         .mockResolvedValueOnce({}) // HeadBucket (ownership check)
         .mockRejectedValueOnce(noSuchBucketError) // PutObject attempt 1 fails
-        .mockRejectedValueOnce(noSuchBucketError) // PutObject attempt 2 fails
-        .mockRejectedValueOnce(noSuchBucketError); // PutObject attempt 3 fails
+        .mockRejectedValueOnce(noSuchBucketError) // PutObject attempt 2 fails (retry 1)
+        .mockRejectedValueOnce(noSuchBucketError) // PutObject attempt 3 fails (retry 2)
+        .mockRejectedValueOnce(noSuchBucketError); // PutObject attempt 4 fails (retry 3)
 
       await expect(uploadToS3(mockClients, 'eu-central-1', '987654321098', 'test-app', 'v2.0.0', 'deploy.jar', 3, 1, false))
-        .rejects.toThrow('Upload to S3 failed after 3 attempts: The specified bucket does not exist');
+        .rejects.toThrow('Upload to S3 failed after 4 attempts (3 retries): The specified bucket does not exist');
 
-      expect(mockSend).toHaveBeenCalledTimes(4); // 1 HeadBucket + 3 PutObject attempts
+      expect(mockSend).toHaveBeenCalledTimes(5); // 1 HeadBucket + 4 PutObject attempts
     });
   });
 

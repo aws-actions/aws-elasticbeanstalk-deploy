@@ -141,7 +141,7 @@ describe('Main Functions', () => {
         'version-label': 'v1.0.0',
         'deployment-timeout': '900',
         'max-retries': '3',
-        'retry-delay': '5',
+        'retry-delay': '1',
         'exclude-patterns': '*.git*',
         'option-settings': validOptionSettings,
       };
@@ -226,7 +226,8 @@ describe('Main Functions', () => {
     it('should fail after max retries', async () => {
       const mockFn = jest.fn().mockRejectedValue(new Error('fail'));
       await expect(retryWithBackoff(mockFn, 2, 1, 'Test'))
-        .rejects.toThrow('Test failed after 2 attempts: fail');
+        .rejects.toThrow('Test failed after 3 attempts (2 retries): fail');
+      expect(mockFn).toHaveBeenCalledTimes(3);
     });
 
     it('should not retry on access denied errors', async () => {
@@ -428,7 +429,7 @@ describe('Main Functions', () => {
     it('should handle deployment error', async () => {
       mockSend.mockRejectedValue(new Error('AWS Error'));
       await run();
-      expect(mockedCore.setFailed).toHaveBeenCalledWith('Deployment failed: Get AWS Account ID failed after 3 attempts: AWS Error');
+      expect(mockedCore.setFailed).toHaveBeenCalledWith('Deployment failed: Get AWS Account ID failed after 4 attempts (3 retries): AWS Error');
     });
 
     it('should update existing environment and set outputs', async () => {
