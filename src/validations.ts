@@ -116,8 +116,8 @@ function validateNumericInputs() {
 
 function validateOptionalInputs() {
   const applicationVersionLabel = core.getInput('version-label') || process.env.GITHUB_SHA || `v${Date.now()}`;
-  const deploymentPackagePath = core.getInput('deployment-package-path');
-  const excludePatterns = core.getInput('exclude-patterns') || '';
+  const deploymentPackagePath = core.getInput('deployment-package-path').trim() || undefined;
+  const excludePatterns = core.getInput('exclude-patterns').trim() || '';
   const s3BucketName = core.getInput('s3-bucket-name') || undefined;
   const optionSettings = core.getInput('option-settings') || undefined;
 
@@ -160,8 +160,7 @@ function validateOptionalInputs() {
 
 function checkInputConflicts(inputs: Partial<Inputs>): void {
   // Check if deployment-package-path is provided WITH exclude-patterns
-  if (inputs.deploymentPackagePath && inputs.deploymentPackagePath.trim() !== '' &&
-      inputs.excludePatterns && inputs.excludePatterns.trim() !== '') {
+  if (inputs.deploymentPackagePath && inputs.excludePatterns !== '') {
     core.warning(
       'Both deployment-package-path and exclude-patterns are specified. ' +
       'exclude-patterns will be ignored since deployment-package-path takes precedence.'
