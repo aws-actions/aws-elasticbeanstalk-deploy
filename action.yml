@@ -63,6 +63,9 @@ inputs:
   s3-bucket-name:
     description: 'S3 bucket name for deployment packages (defaults to elasticbeanstalk-{region}-{accountId})'
     required: false
+  cname-prefix:
+    description: 'CNAME prefix for the environment URL (e.g. my-app → my-app.elasticbeanstalk.com). Must be 4–63 alphanumeric characters or hyphens. If omitted, AWS auto-assigns one. Only used when creating a new environment.'
+    required: false
   exclude-patterns:
     description: 'Comma-separated list of patterns to exclude from deployment package (e.g., "*.git*,*node_modules*,*.env*")'
     required: false

@@ -32,7 +32,7 @@ export async function run(): Promise<void> {
       deploymentPackagePath, solutionStackName, platformArn,
       createEnvironmentIfNotExists, createApplicationIfNotExists, waitForDeployment,
       waitForEnvironmentRecovery, deploymentTimeout, maxRetries, retryDelay,
-      useExistingApplicationVersionIfAvailable, createS3BucketIfNotExists, s3BucketName, excludePatterns,
+      useExistingApplicationVersionIfAvailable, createS3BucketIfNotExists, s3BucketName, cnamePrefix, excludePatterns,
       optionSettings
     } = inputs as Inputs;
 
@@ -152,6 +152,7 @@ export async function run(): Promise<void> {
         optionSettings!,
         solutionStackName,
         platformArn,
+        cnamePrefix,
         maxRetries,
         retryDelay
       );

@@ -3,6 +3,7 @@ import {
   CreateApplicationVersionCommand,
   UpdateEnvironmentCommand,
   CreateEnvironmentCommand,
+  CreateEnvironmentCommandInput,
   DescribeEnvironmentsCommand,
   DescribeApplicationVersionsCommand,
 } from '@aws-sdk/client-elastic-beanstalk';
@@ -488,6 +489,7 @@ export async function createEnvironment(
   optionSettingsJson: string,
   solutionStackName: string | undefined,
   platformArn: string | undefined,
+  cnamePrefix: string | undefined,
   maxRetries: number,
   retryDelay: number
 ): Promise<void> {
@@ -497,20 +499,18 @@ export async function createEnvironment(
 
   await retryWithBackoff(
     async () => {
-      const commandParams: any = {
+      const commandParams: CreateEnvironmentCommandInput = {
         ApplicationName: applicationName,
         EnvironmentName: environmentName,
         VersionLabel: versionLabel,
-        CNAMEPrefix: environmentName,
         OptionSettings: optionSettings,
+        ...(cnamePrefix ? { CNAMEPrefix: cnamePrefix } : {}),
+        ...(solutionStackName
+          ? { SolutionStackName: solutionStackName }
+          : platformArn
+            ? { PlatformArn: platformArn }
+            : {}),
       };
-
-      // Only set one of SolutionStackName or PlatformArn
-      if (solutionStackName) {
-        commandParams.SolutionStackName = solutionStackName;
-      } else if (platformArn) {
-        commandParams.PlatformArn = platformArn;
-      }
 
       const command = new CreateEnvironmentCommand(commandParams);
 

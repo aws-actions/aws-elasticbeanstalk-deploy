@@ -18,6 +18,7 @@ export interface Inputs {
   useExistingApplicationVersionIfAvailable: boolean;
   createS3BucketIfNotExists: boolean;
   s3BucketName?: string;
+  cnamePrefix?: string;
   excludePatterns: string;
   optionSettings?: string;
 }
@@ -119,6 +120,7 @@ function validateOptionalInputs() {
   const deploymentPackagePath = core.getInput('deployment-package-path').trim() || undefined;
   const excludePatterns = core.getInput('exclude-patterns').trim() || '';
   const s3BucketName = core.getInput('s3-bucket-name') || undefined;
+  const cnamePrefix = core.getInput('cname-prefix') || undefined;
   const optionSettings = core.getInput('option-settings') || undefined;
 
   // Validate option-settings is valid JSON array if provided
@@ -153,6 +155,7 @@ function validateOptionalInputs() {
     useExistingApplicationVersionIfAvailable,
     createS3BucketIfNotExists,
     s3BucketName,
+    cnamePrefix,
     excludePatterns,
     optionSettings
   };

@@ -315,14 +315,56 @@ describe('Main Functions', () => {
   describe('createEnvironment', () => {
     it('should create environment', async () => {
       mockSend.mockResolvedValue({});
-      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[{"Namespace":"aws:autoscaling:launchconfiguration","OptionName":"IamInstanceProfile","Value":"profile"}]', 'stack', undefined, 3, 1);
+      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[{"Namespace":"aws:autoscaling:launchconfiguration","OptionName":"IamInstanceProfile","Value":"profile"}]', 'stack', undefined, undefined, 3, 1);
       expect(mockSend).toHaveBeenCalledTimes(1); // 1 create
     });
 
     it('should create environment with custom options', async () => {
       mockSend.mockResolvedValue({});
-      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[{"Namespace":"test","OptionName":"test","Value":"test"}]', 'stack', undefined, 3, 1);
+      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[{"Namespace":"test","OptionName":"test","Value":"test"}]', 'stack', undefined, undefined, 3, 1);
       expect(mockSend).toHaveBeenCalledTimes(1);
+    });
+
+    it('should pass cnamePrefix to CreateEnvironmentCommand', async () => {
+      const { CreateEnvironmentCommand } = require('@aws-sdk/client-elastic-beanstalk');
+      mockSend.mockResolvedValue({});
+      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[]', 'stack', undefined, 'my-cname', 3, 1);
+      expect(CreateEnvironmentCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ CNAMEPrefix: 'my-cname' })
+      );
+    });
+
+    it('should not include CNAMEPrefix when cnamePrefix is undefined', async () => {
+      const { CreateEnvironmentCommand } = require('@aws-sdk/client-elastic-beanstalk');
+      mockSend.mockResolvedValue({});
+      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[]', 'stack', undefined, undefined, 3, 1);
+      expect(CreateEnvironmentCommand).toHaveBeenCalledWith(
+        expect.not.objectContaining({ CNAMEPrefix: expect.anything() })
+      );
+    });
+
+    it('should use PlatformArn only when SolutionStackName is not set', async () => {
+      const { CreateEnvironmentCommand } = require('@aws-sdk/client-elastic-beanstalk');
+      mockSend.mockResolvedValue({});
+      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[]', undefined, 'arn:aws:elasticbeanstalk:us-east-1::platform/Node.js/1.0', undefined, 3, 1);
+      expect(CreateEnvironmentCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ PlatformArn: 'arn:aws:elasticbeanstalk:us-east-1::platform/Node.js/1.0' })
+      );
+      expect(CreateEnvironmentCommand).toHaveBeenCalledWith(
+        expect.not.objectContaining({ SolutionStackName: expect.anything() })
+      );
+    });
+
+    it('should prefer SolutionStackName over PlatformArn when both are set', async () => {
+      const { CreateEnvironmentCommand } = require('@aws-sdk/client-elastic-beanstalk');
+      mockSend.mockResolvedValue({});
+      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[]', 'stack-name', 'arn:platform', undefined, 3, 1);
+      expect(CreateEnvironmentCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ SolutionStackName: 'stack-name' })
+      );
+      expect(CreateEnvironmentCommand).toHaveBeenCalledWith(
+        expect.not.objectContaining({ PlatformArn: expect.anything() })
+      );
     });
   });
 
