@@ -35,10 +35,10 @@ function validateRequiredInputs() {
     return { valid: false };
   }
 
-  // Validate AWS region format (e.g., us-east-1, eu-west-2)
-  const regionPattern = /^[a-z]{2}-[a-z]+-\d{1}$/;
+  // Validate AWS region format (e.g., us-east-1, eu-west-2, us-gov-east-1)
+  const regionPattern = /^(us(-gov)?|af|ap|ca|eu|il|me|sa)-(north|south|east|west|central|northeast|southeast|northwest|southwest)-\d$/;
   if (!regionPattern.test(awsRegion)) {
-    core.setFailed(`Invalid AWS region format: ${awsRegion}. Expected format like 'us-east-1'`);
+    core.setFailed(`Invalid AWS region format: ${awsRegion}. Expected format like 'us-east-1' or 'us-gov-east-1'`);
     return { valid: false };
   }
 

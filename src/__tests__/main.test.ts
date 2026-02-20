@@ -21,6 +21,7 @@ jest.mock('fs', () => ({
   writeFileSync: jest.fn(),
   existsSync: jest.fn(),
   statSync: jest.fn(),
+  createReadStream: jest.fn(() => 'mock-stream'),
   createWriteStream: jest.fn(() => ({
     on: jest.fn((event, callback) => {
       if (event === 'close') {
@@ -83,12 +84,6 @@ jest.mock('@aws-sdk/client-s3', () => ({
 jest.mock('@aws-sdk/client-sts', () => ({
   STSClient: jest.fn(() => ({ send: mockSend })),
   GetCallerIdentityCommand: jest.fn(),
-}));
-
-jest.mock('@aws-sdk/client-iam', () => ({
-  IAMClient: jest.fn(() => ({ send: mockSend })),
-  GetInstanceProfileCommand: jest.fn(),
-  GetRoleCommand: jest.fn(),
 }));
 
 import * as core from '@actions/core';
