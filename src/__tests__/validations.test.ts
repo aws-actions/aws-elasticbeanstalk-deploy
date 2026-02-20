@@ -84,7 +84,49 @@ describe('Validation Functions', () => {
       const result = validateAllInputs();
 
       expect(result.valid).toBe(false);
-      expect(mockedCore.setFailed).toHaveBeenCalledWith('Invalid AWS region format: invalid-region. Expected format like \'us-east-1\'');
+      expect(mockedCore.setFailed).toHaveBeenCalledWith('Invalid AWS region format: invalid-region. Expected format like \'us-east-1\' or \'us-gov-east-1\'');
+    });
+
+    it('should validate successfully for GovCloud regions', () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-gov-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'solution-stack-name': '64bit Amazon Linux 2',
+          'deployment-timeout': '900',
+          'max-retries': '3',
+          'retry-delay': '5',
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(true);
+      expect(result.awsRegion).toBe('us-gov-east-1');
+    });
+
+    it('should validate successfully for us-gov-west-1', () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-gov-west-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'solution-stack-name': '64bit Amazon Linux 2',
+          'deployment-timeout': '900',
+          'max-retries': '3',
+          'retry-delay': '5',
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(true);
+      expect(result.awsRegion).toBe('us-gov-west-1');
     });
 
     it('should fail validation for invalid deployment-timeout', () => {
