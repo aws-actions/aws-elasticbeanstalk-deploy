@@ -319,11 +319,11 @@ export async function uploadToS3(
 
   await retryWithBackoff(
     async () => {
-      const fileContent = fs.readFileSync(packagePath);
       const command = new PutObjectCommand({
         Bucket: bucket,
         Key: key,
-        Body: fileContent,
+        Body: fs.createReadStream(packagePath),
+        ContentLength: fileSizeBytes,
       });
 
       await clients.getS3Client().send(command);
