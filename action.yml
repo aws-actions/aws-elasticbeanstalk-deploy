@@ -41,7 +41,7 @@ inputs:
     required: false
     default: 'true'
   deployment-timeout:
-    description: 'Maximum time to wait for deployment (seconds)'
+    description: 'Maximum time to wait for each wait phase (seconds). If both wait-for-deployment and wait-for-environment-recovery are enabled, the total maximum wait is 2× this value.'
     required: false
     default: '900'
   max-retries:
