@@ -63,7 +63,7 @@ export declare function updateEnvironment(clients: AWSClients, applicationName: 
 /**
  * Create a new environment
  */
-export declare function createEnvironment(clients: AWSClients, applicationName: string, environmentName: string, versionLabel: string, optionSettingsJson: string, solutionStackName: string | undefined, platformArn: string | undefined, maxRetries: number, retryDelay: number): Promise<void>;
+export declare function createEnvironment(clients: AWSClients, applicationName: string, environmentName: string, versionLabel: string, optionSettingsJson: string, solutionStackName: string | undefined, platformArn: string | undefined, cnamePrefix: string | undefined, maxRetries: number, retryDelay: number): Promise<void>;
 /**
  * Get environment information
  */

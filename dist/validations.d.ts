@@ -16,6 +16,7 @@ export interface Inputs {
     useExistingApplicationVersionIfAvailable: boolean;
     createS3BucketIfNotExists: boolean;
     s3BucketName?: string;
+    cnamePrefix?: string;
     excludePatterns: string;
     optionSettings?: string;
 }
