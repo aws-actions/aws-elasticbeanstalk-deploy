@@ -21,6 +21,7 @@ jest.mock('fs', () => ({
   writeFileSync: jest.fn(),
   existsSync: jest.fn(),
   statSync: jest.fn(),
+  createReadStream: jest.fn(() => 'mock-stream'),
   promises: {
     access: jest.fn(),
     readFile: jest.fn(),
