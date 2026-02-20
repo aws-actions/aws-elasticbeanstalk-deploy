@@ -41,12 +41,8 @@ jobs:
         run: |
           BRANCH_NAME="chore/update-dist"
           git add dist/
-          if git diff --staged --quiet main -- dist/ ; then
-            echo "No changes to commit"
-          else
-            git commit -m "(chore) updating dist"
-            git push origin "$BRANCH_NAME"
-            if ! gh pr list --head "$BRANCH_NAME" --state open | grep -q .; then
-              gh pr create --title "(chore) Update dist" --body "Automated PR to update the dist folder." --base main
-            fi
+          git diff --staged --quiet || git commit -m "(chore) updating dist"
+          git push origin "$BRANCH_NAME"
+          if ! gh pr list --head "$BRANCH_NAME" --state open | grep -q .; then
+            gh pr create --title "(chore) Update dist" --body "Automated PR to update the dist folder." --base main
           fi
