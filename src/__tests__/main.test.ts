@@ -86,12 +86,6 @@ jest.mock('@aws-sdk/client-sts', () => ({
   GetCallerIdentityCommand: jest.fn(),
 }));
 
-jest.mock('@aws-sdk/client-iam', () => ({
-  IAMClient: jest.fn(() => ({ send: mockSend })),
-  GetInstanceProfileCommand: jest.fn(),
-  GetRoleCommand: jest.fn(),
-}));
-
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
