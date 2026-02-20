@@ -91926,7 +91926,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getEnvironmentInfo = exports.createEnvironment = exports.updateEnvironment = exports.createApplicationVersion = exports.createS3Bucket = exports.uploadToS3 = exports.verifyBucketOwnership = exports.environmentExists = exports.getVersionS3Location = exports.applicationVersionExists = exports.getAwsAccountId = exports.retryWithBackoff = exports.AWS_S3_REGIONS = exports.validateOptionSettingsForCreate = exports.MAX_DEPLOYMENT_PACKAGE_SIZE_BYTES = void 0;
+exports.getEnvironmentInfo = exports.createEnvironment = exports.updateEnvironment = exports.createApplicationVersion = exports.createS3Bucket = exports.uploadToS3 = exports.environmentExists = exports.getVersionS3Location = exports.applicationVersionExists = exports.getAwsAccountId = exports.retryWithBackoff = exports.AWS_S3_REGIONS = exports.validateOptionSettingsForCreate = exports.MAX_DEPLOYMENT_PACKAGE_SIZE_BYTES = void 0;
 const core = __importStar(__nccwpck_require__(37484));
 const client_elastic_beanstalk_1 = __nccwpck_require__(76114);
 const client_s3_1 = __nccwpck_require__(53711);
@@ -92122,23 +92122,6 @@ async function environmentExists(clients, applicationName, environmentName) {
 }
 exports.environmentExists = environmentExists;
 /**
- * Verify S3 bucket ownership and write permissions
- */
-async function verifyBucketOwnership(clients, bucket, accountId) {
-    const command = new client_s3_1.GetBucketAclCommand({
-        Bucket: bucket,
-        ExpectedBucketOwner: accountId,
-    });
-    const response = await clients.getS3Client().send(command);
-    // Verify the owner has write permissions
-    const ownerGrants = response.Grants?.filter(grant => grant.Grantee?.ID === response.Owner?.ID);
-    const hasWritePermission = ownerGrants?.some(grant => grant.Permission === 'WRITE' || grant.Permission === 'FULL_CONTROL');
-    if (!hasWritePermission) {
-        throw new Error('Bucket owner does not have write permissions');
-    }
-}
-exports.verifyBucketOwnership = verifyBucketOwnership;
-/**
  * Upload deployment package to S3
  */
 async function uploadToS3(clients, region, accountId, applicationName, versionLabel, packagePath, maxRetries, retryDelay, createBucketIfNotExists, customBucketName) {
@@ -92158,7 +92141,13 @@ async function uploadToS3(clients, region, accountId, applicationName, versionLa
         await createS3Bucket(clients, region, bucket, accountId, maxRetries, retryDelay);
     }
     else {
-        await verifyBucketOwnership(clients, bucket, accountId);
+        // Verify bucket exists and is owned by this account before uploading.
+        // ExpectedBucketOwner causes a 403 if owned by a different account,
+        // which is safer than a raw PutObject that might write to the wrong bucket.
+        await clients.getS3Client().send(new client_s3_1.HeadBucketCommand({
+            Bucket: bucket,
+            ExpectedBucketOwner: accountId,
+        }));
     }
     core.info(`☁️  Uploading deployment package to S3`);
     core.info(`   File size: ${fileSizeMB} MB`);
@@ -92181,11 +92170,23 @@ exports.uploadToS3 = uploadToS3;
 async function createS3Bucket(clients, region, bucket, accountId, maxRetries, retryDelay) {
     try {
         core.info('🪣 Checking if S3 bucket exists');
-        await clients.getS3Client().send(new client_s3_1.HeadBucketCommand({ Bucket: bucket }));
+        // ExpectedBucketOwner verifies ownership in the same request:
+        // - 200: bucket exists and is owned by this account
+        // - 403: bucket exists but is owned by a different account
+        // - 404: bucket does not exist
+        await clients.getS3Client().send(new client_s3_1.HeadBucketCommand({
+            Bucket: bucket,
+            ExpectedBucketOwner: accountId,
+        }));
         core.info('✅ S3 bucket exists');
     }
-    catch (_error) {
-        core.info('🪣 S3 bucket does not exist, Creating S3 bucket');
+    catch (error) {
+        const err = error;
+        if (err.$metadata?.httpStatusCode === 403) {
+            throw new Error(`S3 bucket '${bucket}' exists but is not owned by this AWS account (${accountId}). ` +
+                'Specify a different bucket name using the s3-bucket-name input.');
+        }
+        core.info('🪣 S3 bucket does not exist, creating S3 bucket');
         await retryWithBackoff(async () => {
             const createParams = region === 'us-east-1'
                 ? { Bucket: bucket }
@@ -92199,8 +92200,6 @@ async function createS3Bucket(clients, region, bucket, accountId, maxRetries, re
         }, maxRetries, retryDelay, 'Create S3 bucket');
         core.info('✅ S3 bucket created');
     }
-    // Verify ownership after bucket exists (either found or created)
-    await verifyBucketOwnership(clients, bucket, accountId);
 }
 exports.createS3Bucket = createS3Bucket;
 /**

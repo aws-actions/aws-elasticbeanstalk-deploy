@@ -42,10 +42,6 @@ export declare function environmentExists(clients: AWSClients, applicationName: 
     health?: string;
 }>;
 /**
- * Verify S3 bucket ownership and write permissions
- */
-export declare function verifyBucketOwnership(clients: AWSClients, bucket: string, accountId: string): Promise<void>;
-/**
  * Upload deployment package to S3
  */
 export declare function uploadToS3(clients: AWSClients, region: string, accountId: string, applicationName: string, versionLabel: string, packagePath: string, maxRetries: number, retryDelay: number, createBucketIfNotExists: boolean, customBucketName?: string): Promise<{
