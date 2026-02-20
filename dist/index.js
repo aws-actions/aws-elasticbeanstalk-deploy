@@ -92173,12 +92173,10 @@ exports.uploadToS3 = uploadToS3;
  * Create S3 bucket exists if not exists
  */
 async function createS3Bucket(clients, region, bucket, accountId, maxRetries, retryDelay) {
-    let bucketExists = false;
     try {
         core.info('🪣 Checking if S3 bucket exists');
         await clients.getS3Client().send(new client_s3_1.HeadBucketCommand({ Bucket: bucket }));
         core.info('✅ S3 bucket exists');
-        bucketExists = true;
     }
     catch (_error) {
         core.info('🪣 S3 bucket does not exist, Creating S3 bucket');
