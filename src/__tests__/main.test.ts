@@ -277,8 +277,16 @@ describe('Main Functions', () => {
       expect(result).toEqual({ exists: false, status: 'Terminated', health: 'Grey' });
     });
 
-    it('should return false on error', async () => {
+    it('should rethrow unexpected API errors', async () => {
       mockSend.mockRejectedValue(new Error('API Error'));
+      await expect(environmentExists(mockClients, 'app', 'env')).rejects.toThrow('API Error');
+    });
+
+    it('should return false on 404 not found', async () => {
+      const notFoundError = Object.assign(new Error('Not Found'), {
+        name: 'NoSuchEntityException',
+      });
+      mockSend.mockRejectedValue(notFoundError);
       const result = await environmentExists(mockClients, 'app', 'env');
       expect(result).toEqual({ exists: false });
     });
