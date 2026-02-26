@@ -9,6 +9,7 @@ jobs:
   check:
     name: Package distribution file
     runs-on: ubuntu-latest
+    if: ${{ github.actor != 'aws-eb-actions-bot[bot]' }}
     steps:
       - name: Generate GitHub App token
         id: app-token
