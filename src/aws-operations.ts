@@ -2,6 +2,7 @@ import * as core from '@actions/core';
 import {
   CreateApplicationVersionCommand,
   UpdateEnvironmentCommand,
+  UpdateEnvironmentCommandInput,
   CreateEnvironmentCommand,
   CreateEnvironmentCommandInput,
   DescribeEnvironmentsCommand,
@@ -452,7 +453,7 @@ export async function updateEnvironment(
 
   await retryWithBackoff(
     async () => {
-      const commandParams: any = {
+      const commandParams: UpdateEnvironmentCommandInput = {
         ApplicationName: applicationName,
         EnvironmentName: environmentName,
         VersionLabel: versionLabel,
