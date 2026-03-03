@@ -5,6 +5,8 @@ on:
 
 name: Package
 
+permissions: {}
+
 jobs:
   check:
     name: Package distribution file
