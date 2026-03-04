@@ -58,6 +58,7 @@ async function createZipFile(zipFileName: string, excludePatterns: string[]): Pr
     const archive = archiver('zip');
 
     output.on('close', () => resolve());
+    output.on('error', reject);
     archive.on('error', reject);
 
     archive.pipe(output);

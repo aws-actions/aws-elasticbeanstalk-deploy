@@ -194,6 +194,26 @@ describe('Main Functions', () => {
       );
     });
 
+    it('should reject when output stream errors', async () => {
+      mockedFs.existsSync.mockReturnValue(false);
+      mockedFs.readFileSync.mockReturnValue(Buffer.from('test'));
+      const originalImpl = mockedFs.createWriteStream.getMockImplementation();
+      mockedFs.createWriteStream.mockReturnValue({
+        on: jest.fn((event: string, callback: (err?: Error) => void) => {
+          if (event === 'error') {
+            setTimeout(() => callback(new Error('ENOSPC: no space left on device')), 0);
+          }
+        }),
+      } as any);
+
+      await expect(
+        createDeploymentPackage(undefined, 'v1.0.0', '*.git*')
+      ).rejects.toThrow('ENOSPC: no space left on device');
+
+      // Restore default mock so subsequent tests aren't affected
+      mockedFs.createWriteStream.mockImplementation(originalImpl!);
+    });
+
     it('should fail when deployment-package-path is a directory', async () => {
       mockedFs.existsSync.mockReturnValue(true);
       mockedFs.statSync.mockReturnValue({ isFile: () => false } as any);
