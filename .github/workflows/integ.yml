@@ -1,10 +1,12 @@
 name: Integration Test
 
 on:
-  # Triggered when 'run-integ-test' label is added (by integ-label.yml on PR approval).
-  # Uses pull_request_target so fork PRs run in the base repo context.
+  # Uses pull_request_target so fork PRs run in the base repo context with access to secrets.
+  # Fork PRs require manual approval via repo Settings > Actions > "Require approval for
+  # all outside collaborators" before the workflow runs.
   pull_request_target:
-    types: [labeled]
+    types: [opened, synchronize, reopened]
+  # Allows you to run this manually from the "Actions" tab
   workflow_dispatch:
 
 permissions:
@@ -22,8 +24,7 @@ jobs:
     name: Integration Test
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    # Logic Gate: Only run if it's a manual trigger OR the PR was explicitly approved
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request_target' && github.event.label.name == 'run-integ-test')
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request_target'
 
     env:
       AWS_REGION: us-east-1
