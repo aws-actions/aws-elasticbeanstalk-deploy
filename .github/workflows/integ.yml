@@ -37,11 +37,11 @@ jobs:
 
       - name: Pre-emptive Masking
         shell: bash
+        env:
+          M_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+          M_ROLE: ${{ secrets.AWS_ROLE_ID }}
         run: |
           set +x # Disable command echoing
-          M_ACCOUNT="${{ secrets.AWS_ACCOUNT_ID }}"
-          M_ROLE="${{ secrets.AWS_ROLE_ID }}"
-
           # Register masks
           echo "::add-mask::$M_ACCOUNT"
           echo "::add-mask::$M_ROLE"
@@ -71,17 +71,19 @@ jobs:
           mask-aws-account-id: 'true'
           role-session-name: GitHubActions
 
-      - name: Get latest Python solution stack
-        id: solution-stack
+      - name: Get latest Python platform
+        id: platform
         shell: bash
         run: |
           set +x
-          # Dynamically fetch the newest solutionstack to avoid using deprecated versions
-          STACK=$(aws elasticbeanstalk list-available-solution-stacks \
-            --region "${{ env.AWS_REGION }}" \
-            --query "SolutionStacks[?contains(@, 'Python') && contains(@, 'Amazon Linux')] | [0]" \
+          BRANCH=$(aws elasticbeanstalk list-platform-branches \
+            --filters \
+              '[{"Attribute":"BranchName","Operator":"contains","Values":["Python"]},{"Attribute":"LifecycleState","Operator":"=","Values":["Supported"]}]' \
+            --query "PlatformBranchSummaryList | sort_by(@, &BranchOrder) | [-1].BranchName" \
             --output text)
-          echo "name=$STACK" >> "$GITHUB_OUTPUT"
+          PLATFORM_ARN="arn:aws:elasticbeanstalk:::platform/${BRANCH}"
+          echo "Using platform: $PLATFORM_ARN"
+          echo "name=$PLATFORM_ARN" >> "$GITHUB_OUTPUT"
           set -x
 
       - name: Deploy - Create Environment
@@ -93,7 +95,7 @@ jobs:
           environment-name: ${{ env.ENV_NAME }}
           version-label: create-${{ github.run_id }}
           deployment-package-path: test-app.zip
-          solution-stack-name: ${{ steps.solution-stack.outputs.name }}
+          platform-arn: ${{ steps.platform.outputs.name }}
           create-environment-if-not-exists: 'true'
           create-application-if-not-exists: 'true'
           wait-for-deployment: 'false'
@@ -109,14 +111,11 @@ jobs:
         run: |
           set +x
           echo "⏳ Waiting for environment launch (10m timeout)..."
-          # Wait for the environment to exist in the API first
-          aws elasticbeanstalk wait environment-exists --environment-names "${{ env.ENV_NAME }}" --region "${{ env.AWS_REGION }}" > /dev/null
-          
+
           TIMEOUT_SECONDS=600
           START_TIME=$(date +%s)
           END_TIME=$((START_TIME + TIMEOUT_SECONDS))
 
-          # Stealth Polling Loop: Check status every 15s
           while true; do
             if [ "$(date +%s)" -gt "$END_TIME" ]; then
               echo "::error::Create timed out after 10 minutes."
@@ -128,12 +127,16 @@ jobs:
             HEALTH=$(echo "$ENV_INFO" | awk '{print $2}')
 
             if [ "$STATUS" == "Ready" ]; then
-              echo "✅ Create Ready (Health: $HEALTH)"
-              if [[ "$HEALTH" != "Green" && "$HEALTH" != "Ok" ]]; then
-                echo "::error::Create Ready but Health is $HEALTH"
+              if [[ "$HEALTH" == "Green" || "$HEALTH" == "Ok" || "$HEALTH" == "Yellow" ]]; then
+                echo "✅ Create Ready (Health: $HEALTH)"
+                break
+              elif [ "$HEALTH" == "Red" ]; then
+                echo "::error::Create Ready but Health is Red."
                 exit 1
               fi
-              break
+              echo "...Ready but Health is $HEALTH. Waiting for healthy status..."
+              sleep 15
+              continue
             fi
             echo "...status is $STATUS ($HEALTH). Checking again in 15s..."
             sleep 15
@@ -187,7 +190,7 @@ jobs:
         run: |
           set +x
           echo "⏳ Waiting for environment update (10m timeout)..."
-          
+
           TIMEOUT_SECONDS=600
           START_TIME=$(date +%s)
           END_TIME=$((START_TIME + TIMEOUT_SECONDS))
@@ -203,12 +206,16 @@ jobs:
             HEALTH=$(echo "$ENV_INFO" | awk '{print $2}')
 
             if [ "$STATUS" == "Ready" ]; then
-              echo "✅ Update Ready (Health: $HEALTH)"
-              if [[ "$HEALTH" != "Green" && "$HEALTH" != "Ok" ]]; then
-                echo "::error::Update Ready but Health is $HEALTH"
+              if [[ "$HEALTH" == "Green" || "$HEALTH" == "Ok" || "$HEALTH" == "Yellow" ]]; then
+                echo "✅ Update Ready (Health: $HEALTH)"
+                break
+              elif [ "$HEALTH" == "Red" ]; then
+                echo "::error::Update Ready but Health is Red."
                 exit 1
               fi
-              break
+              echo "...Ready but Health is $HEALTH. Waiting for healthy status..."
+              sleep 15
+              continue
             fi
             echo "...updating: $STATUS ($HEALTH). Checking again in 15s..."
             sleep 15
