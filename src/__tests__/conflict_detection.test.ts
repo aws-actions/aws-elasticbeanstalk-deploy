@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import * as fs from 'fs';
 import { validateAllInputs } from '../validations';
 
 // Mock @actions/core
@@ -9,6 +10,13 @@ jest.mock('@actions/core', () => ({
   warning: jest.fn(),
   info: jest.fn(),
 }));
+
+jest.mock('fs', () => ({
+  existsSync: jest.fn(),
+  statSync: jest.fn(),
+}));
+
+const mockedFs = fs as jest.Mocked<typeof fs>;
 
 const mockedCore = jest.mocked(core);
 
@@ -44,6 +52,46 @@ describe('Input Conflict Detection', () => {
     });
 
     mockedCore.getBooleanInput.mockReturnValue(true);
+  });
+
+  it('should warn when deployment-package-path is provided with source-directory', () => {
+    const validOptionSettings = JSON.stringify([
+      {
+        "Namespace": "aws:autoscaling:launchconfiguration",
+        "OptionName": "IamInstanceProfile",
+        "Value": "test-profile"
+      },
+      {
+        "Namespace": "aws:elasticbeanstalk:environment",
+        "OptionName": "ServiceRole",
+        "Value": "test-role"
+      }
+    ]);
+
+    mockedFs.existsSync.mockReturnValue(true);
+    mockedFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
+
+    mockedCore.getInput.mockImplementation((name: string) => {
+      const inputs: Record<string, string> = {
+        'aws-region': 'us-east-1',
+        'application-name': 'test-app',
+        'environment-name': 'test-env',
+        'solution-stack-name': '64bit Amazon Linux 2023',
+        'deployment-package-path': 'my-app.zip',
+        'source-directory': './frontend',
+        'deployment-timeout': '900',
+        'max-retries': '3',
+        'retry-delay': '5',
+        'option-settings': validOptionSettings,
+      };
+      return inputs[name] || '';
+    });
+
+    validateAllInputs();
+
+    expect(mockedCore.warning).toHaveBeenCalledWith(
+      expect.stringContaining('deployment-package-path and source-directory')
+    );
   });
 
   it('should warn when deployment-package is provided with exclude-patterns', () => {

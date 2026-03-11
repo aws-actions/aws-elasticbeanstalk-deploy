@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import * as fs from 'fs';
 
 export interface Inputs {
   awsRegion: string;
@@ -19,6 +20,7 @@ export interface Inputs {
   createS3BucketIfNotExists: boolean;
   s3BucketName?: string;
   cnamePrefix?: string;
+  sourceDirectory?: string;
   excludePatterns: string;
   optionSettings?: string;
 }
@@ -118,10 +120,23 @@ function validateNumericInputs() {
 function validateOptionalInputs() {
   const applicationVersionLabel = core.getInput('version-label') || process.env.GITHUB_SHA || `v${Date.now()}`;
   const deploymentPackagePath = core.getInput('deployment-package-path').trim() || undefined;
+  const sourceDirectory = core.getInput('source-directory').trim() || undefined;
   const excludePatterns = core.getInput('exclude-patterns').trim() || '';
   const s3BucketName = core.getInput('s3-bucket-name') || undefined;
   const cnamePrefix = core.getInput('cname-prefix') || undefined;
   const optionSettings = core.getInput('option-settings') || undefined;
+
+  // Validate source-directory exists and is a directory if provided
+  if (sourceDirectory) {
+    if (!fs.existsSync(sourceDirectory)) {
+      core.setFailed(`source-directory '${sourceDirectory}' does not exist.`);
+      return { valid: false };
+    }
+    if (!fs.statSync(sourceDirectory).isDirectory()) {
+      core.setFailed(`source-directory '${sourceDirectory}' is not a directory.`);
+      return { valid: false };
+    }
+  }
 
   // Validate option-settings is valid JSON array if provided
   if (optionSettings) {
@@ -148,6 +163,7 @@ function validateOptionalInputs() {
     valid: true,
     applicationVersionLabel,
     deploymentPackagePath,
+    sourceDirectory,
     createEnvironmentIfNotExists,
     createApplicationIfNotExists,
     waitForDeployment,
@@ -167,6 +183,14 @@ function checkInputConflicts(inputs: Partial<Inputs>): void {
     core.warning(
       'Both deployment-package-path and exclude-patterns are specified. ' +
       'exclude-patterns will be ignored since deployment-package-path takes precedence.'
+    );
+  }
+
+  // Check if deployment-package-path is provided WITH source-directory
+  if (inputs.deploymentPackagePath && inputs.sourceDirectory) {
+    core.warning(
+      'Both deployment-package-path and source-directory are specified. ' +
+      'source-directory will be ignored since deployment-package-path takes precedence.'
     );
   }
 
@@ -231,6 +255,7 @@ export function validateAllInputs(): { valid: boolean } & Partial<Inputs> {
     retryDelay: numericInputs.retryDelay,
     applicationVersionLabel: optionalInputs.applicationVersionLabel!,
     deploymentPackagePath: optionalInputs.deploymentPackagePath,
+    sourceDirectory: optionalInputs.sourceDirectory,
     createEnvironmentIfNotExists: optionalInputs.createEnvironmentIfNotExists!,
     createApplicationIfNotExists: optionalInputs.createApplicationIfNotExists!,
     waitForDeployment: optionalInputs.waitForDeployment!,

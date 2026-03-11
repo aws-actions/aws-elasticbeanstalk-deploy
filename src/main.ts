@@ -29,7 +29,7 @@ export async function run(): Promise<void> {
 
     const {
       awsRegion, applicationName, environmentName, applicationVersionLabel,
-      deploymentPackagePath, solutionStackName, platformArn,
+      deploymentPackagePath, sourceDirectory, solutionStackName, platformArn,
       createEnvironmentIfNotExists, createApplicationIfNotExists, waitForDeployment,
       waitForEnvironmentRecovery, deploymentTimeout, maxRetries, retryDelay,
       useExistingApplicationVersionIfAvailable, createS3BucketIfNotExists, s3BucketName, cnamePrefix, excludePatterns,
@@ -55,7 +55,8 @@ export async function run(): Promise<void> {
     const { path: packagePath } = await createDeploymentPackage(
       deploymentPackagePath,
       applicationVersionLabel,
-      excludePatterns
+      excludePatterns,
+      sourceDirectory
     );
     core.endGroup();
 

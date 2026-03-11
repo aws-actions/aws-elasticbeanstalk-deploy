@@ -184,6 +184,23 @@ describe('Main Functions', () => {
       expect(mockArchiveInstance.finalize).toHaveBeenCalled();
     });
 
+    it('should pass sourceDirectory as cwd to archiver glob', async () => {
+      mockedFs.existsSync.mockReturnValue(false);
+      mockedFs.readFileSync.mockReturnValue(Buffer.from('test'));
+
+      const result = await createDeploymentPackage(undefined, 'v1.0.0', '*.git*', './frontend');
+
+      expect(result.path).toBe('deploy-v1.0.0.zip');
+
+      const archiver = require('archiver');
+      const mockArchiveInstance = archiver();
+      expect(mockArchiveInstance.glob).toHaveBeenCalledWith('**/*', {
+        cwd: './frontend',
+        dot: true,
+        ignore: ['*.git*']
+      });
+    });
+
     it('should fail when deployment-package-path does not exist', async () => {
       mockedFs.existsSync.mockReturnValue(false);
 

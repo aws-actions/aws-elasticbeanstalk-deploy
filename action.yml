@@ -66,6 +66,9 @@ inputs:
   cname-prefix:
     description: 'CNAME prefix for the environment URL (e.g. my-app → my-app.elasticbeanstalk.com). Must be 4–63 alphanumeric characters or hyphens. If omitted, AWS auto-assigns one. Only used when creating a new environment.'
     required: false
+  source-directory:
+    description: 'Directory to package for deployment (defaults to workspace root). Useful for mono-repos where only a subdirectory should be deployed.'
+    required: false
   exclude-patterns:
     description: 'Comma-separated list of patterns to exclude from deployment package (e.g., "*.git*,*node_modules*,*.env*")'
     required: false

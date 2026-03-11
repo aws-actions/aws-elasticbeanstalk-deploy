@@ -12,7 +12,8 @@ import archiver from 'archiver';
 export async function createDeploymentPackage(
   packagePath: string | undefined,
   versionLabel: string,
-  excludePatternsInput: string
+  excludePatternsInput: string,
+  sourceDirectory?: string
 ): Promise<{ path: string }> {
   if (packagePath) {
     // deployment-package-path explicitly provided by user
@@ -44,7 +45,7 @@ export async function createDeploymentPackage(
     .map(p => p.trim())
     .filter(p => p.length > 0);
 
-  await createZipFile(zipFileName, excludePatterns);
+  await createZipFile(zipFileName, excludePatterns, sourceDirectory);
 
   return { path: zipFileName };
 }
@@ -52,7 +53,7 @@ export async function createDeploymentPackage(
 /**
  * Creates a zip file using archiver
  */
-async function createZipFile(zipFileName: string, excludePatterns: string[]): Promise<void> {
+async function createZipFile(zipFileName: string, excludePatterns: string[], sourceDirectory?: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const output = fs.createWriteStream(zipFileName);
     const archive = archiver('zip');
@@ -62,7 +63,7 @@ async function createZipFile(zipFileName: string, excludePatterns: string[]): Pr
     archive.on('error', reject);
 
     archive.pipe(output);
-    archive.glob('**/*', { ignore: excludePatterns, dot: true });
+    archive.glob('**/*', { cwd: sourceDirectory, ignore: excludePatterns, dot: true });
     archive.finalize();
   });
 }

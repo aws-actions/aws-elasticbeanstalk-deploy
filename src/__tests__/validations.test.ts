@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import * as fs from 'fs';
 import { validateAllInputs, parseJsonInput } from '../validations';
 
 jest.mock('@actions/core', () => ({
@@ -9,7 +10,13 @@ jest.mock('@actions/core', () => ({
   info: jest.fn(),
 }));
 
+jest.mock('fs', () => ({
+  existsSync: jest.fn(),
+  statSync: jest.fn(),
+}));
+
 const mockedCore = core as jest.Mocked<typeof core>;
+const mockedFs = fs as jest.Mocked<typeof fs>;
 
 describe('Validation Functions', () => {
   beforeEach(() => {
@@ -431,6 +438,71 @@ describe('Validation Functions', () => {
 
       expect(result.valid).toBe(false);
       expect(mockedCore.setFailed).toHaveBeenCalledWith('Cannot specify both solution-stack-name and platform-arn. Use only one.');
+    });
+
+    it('should return sourceDirectory in validated inputs when provided', () => {
+      mockedFs.existsSync.mockReturnValue(true);
+      mockedFs.statSync.mockReturnValue({ isDirectory: () => true } as any);
+
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'solution-stack-name': '64bit Amazon Linux 2',
+          'source-directory': './frontend',
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(true);
+      expect(result.sourceDirectory).toBe('./frontend');
+    });
+
+    it('should fail validation when source-directory does not exist', () => {
+      mockedFs.existsSync.mockReturnValue(false);
+
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'solution-stack-name': '64bit Amazon Linux 2',
+          'source-directory': './nonexistent',
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(false);
+      expect(mockedCore.setFailed).toHaveBeenCalledWith("source-directory './nonexistent' does not exist.");
+    });
+
+    it('should fail validation when source-directory is a file', () => {
+      mockedFs.existsSync.mockReturnValue(true);
+      mockedFs.statSync.mockReturnValue({ isDirectory: () => false } as any);
+
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'solution-stack-name': '64bit Amazon Linux 2',
+          'source-directory': './some-file.txt',
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(false);
+      expect(mockedCore.setFailed).toHaveBeenCalledWith("source-directory './some-file.txt' is not a directory.");
     });
 
     it('should validate successfully with platform-arn instead of solution-stack-name', () => {
