@@ -5,6 +5,6 @@
  * @param excludePatternsInput - Comma-separated patterns to exclude
  * @returns Object containing the path to the deployment package
  */
-export declare function createDeploymentPackage(packagePath: string | undefined, versionLabel: string, excludePatternsInput: string): Promise<{
+export declare function createDeploymentPackage(packagePath: string | undefined, versionLabel: string, excludePatternsInput: string, sourceDirectory?: string): Promise<{
     path: string;
 }>;

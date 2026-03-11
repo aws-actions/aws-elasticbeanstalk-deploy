@@ -92407,7 +92407,7 @@ const archiver_1 = __importDefault(__nccwpck_require__(99392));
  * @param excludePatternsInput - Comma-separated patterns to exclude
  * @returns Object containing the path to the deployment package
  */
-async function createDeploymentPackage(packagePath, versionLabel, excludePatternsInput) {
+async function createDeploymentPackage(packagePath, versionLabel, excludePatternsInput, sourceDirectory) {
     if (packagePath) {
         // deployment-package-path explicitly provided by user
         if (!fs.existsSync(packagePath)) {
@@ -92429,14 +92429,14 @@ async function createDeploymentPackage(packagePath, versionLabel, excludePattern
         .split(',')
         .map(p => p.trim())
         .filter(p => p.length > 0);
-    await createZipFile(zipFileName, excludePatterns);
+    await createZipFile(zipFileName, excludePatterns, sourceDirectory);
     return { path: zipFileName };
 }
 exports.createDeploymentPackage = createDeploymentPackage;
 /**
  * Creates a zip file using archiver
  */
-async function createZipFile(zipFileName, excludePatterns) {
+async function createZipFile(zipFileName, excludePatterns, sourceDirectory) {
     return new Promise((resolve, reject) => {
         const output = fs.createWriteStream(zipFileName);
         const archive = (0, archiver_1.default)('zip');
@@ -92444,7 +92444,7 @@ async function createZipFile(zipFileName, excludePatterns) {
         output.on('error', reject);
         archive.on('error', reject);
         archive.pipe(output);
-        archive.glob('**/*', { ignore: excludePatterns, dot: true });
+        archive.glob('**/*', { cwd: sourceDirectory, ignore: excludePatterns, dot: true });
         archive.finalize();
     });
 }
@@ -92496,7 +92496,7 @@ async function run() {
         if (!inputs.valid) {
             return;
         }
-        const { awsRegion, applicationName, environmentName, applicationVersionLabel, deploymentPackagePath, solutionStackName, platformArn, createEnvironmentIfNotExists, createApplicationIfNotExists, waitForDeployment, waitForEnvironmentRecovery, deploymentTimeout, maxRetries, retryDelay, useExistingApplicationVersionIfAvailable, createS3BucketIfNotExists, s3BucketName, cnamePrefix, excludePatterns, optionSettings } = inputs;
+        const { awsRegion, applicationName, environmentName, applicationVersionLabel, deploymentPackagePath, sourceDirectory, solutionStackName, platformArn, createEnvironmentIfNotExists, createApplicationIfNotExists, waitForDeployment, waitForEnvironmentRecovery, deploymentTimeout, maxRetries, retryDelay, useExistingApplicationVersionIfAvailable, createS3BucketIfNotExists, s3BucketName, cnamePrefix, excludePatterns, optionSettings } = inputs;
         core.startGroup('📋 Validating inputs');
         core.info(`Application: ${applicationName}`);
         core.info(`Environment: ${environmentName}`);
@@ -92510,7 +92510,7 @@ async function run() {
         core.info('✅ AWS account verified');
         core.endGroup();
         core.startGroup('📦 Creating deployment package');
-        const { path: packagePath } = await (0, deploymentpackage_1.createDeploymentPackage)(deploymentPackagePath, applicationVersionLabel, excludePatterns);
+        const { path: packagePath } = await (0, deploymentpackage_1.createDeploymentPackage)(deploymentPackagePath, applicationVersionLabel, excludePatterns, sourceDirectory);
         core.endGroup();
         // Check if we should reuse existing application version
         let bucket;
@@ -92841,6 +92841,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.parseJsonInput = exports.validateAllInputs = void 0;
 const core = __importStar(__nccwpck_require__(37484));
+const fs = __importStar(__nccwpck_require__(79896));
 function validateRequiredInputs() {
     const awsRegion = core.getInput('aws-region', { required: true });
     const applicationName = core.getInput('application-name', { required: true });
@@ -92920,10 +92921,22 @@ function validateNumericInputs() {
 function validateOptionalInputs() {
     const applicationVersionLabel = core.getInput('version-label') || process.env.GITHUB_SHA || `v${Date.now()}`;
     const deploymentPackagePath = core.getInput('deployment-package-path').trim() || undefined;
+    const sourceDirectory = core.getInput('source-directory').trim() || undefined;
     const excludePatterns = core.getInput('exclude-patterns').trim() || '';
     const s3BucketName = core.getInput('s3-bucket-name') || undefined;
     const cnamePrefix = core.getInput('cname-prefix') || undefined;
     const optionSettings = core.getInput('option-settings') || undefined;
+    // Validate source-directory exists and is a directory if provided
+    if (sourceDirectory) {
+        if (!fs.existsSync(sourceDirectory)) {
+            core.setFailed(`source-directory '${sourceDirectory}' does not exist.`);
+            return { valid: false };
+        }
+        if (!fs.statSync(sourceDirectory).isDirectory()) {
+            core.setFailed(`source-directory '${sourceDirectory}' is not a directory.`);
+            return { valid: false };
+        }
+    }
     // Validate option-settings is valid JSON array if provided
     if (optionSettings) {
         try {
@@ -92948,6 +92961,7 @@ function validateOptionalInputs() {
         valid: true,
         applicationVersionLabel,
         deploymentPackagePath,
+        sourceDirectory,
         createEnvironmentIfNotExists,
         createApplicationIfNotExists,
         waitForDeployment,
@@ -92965,6 +92979,11 @@ function checkInputConflicts(inputs) {
     if (inputs.deploymentPackagePath && inputs.excludePatterns !== '') {
         core.warning('Both deployment-package-path and exclude-patterns are specified. ' +
             'exclude-patterns will be ignored since deployment-package-path takes precedence.');
+    }
+    // Check if deployment-package-path is provided WITH source-directory
+    if (inputs.deploymentPackagePath && inputs.sourceDirectory) {
+        core.warning('Both deployment-package-path and source-directory are specified. ' +
+            'source-directory will be ignored since deployment-package-path takes precedence.');
     }
     // Check if create-application-if-not-exists is true but create-environment-if-not-exists is false
     if (inputs.createApplicationIfNotExists && !inputs.createEnvironmentIfNotExists) {
@@ -93012,6 +93031,7 @@ function validateAllInputs() {
         retryDelay: numericInputs.retryDelay,
         applicationVersionLabel: optionalInputs.applicationVersionLabel,
         deploymentPackagePath: optionalInputs.deploymentPackagePath,
+        sourceDirectory: optionalInputs.sourceDirectory,
         createEnvironmentIfNotExists: optionalInputs.createEnvironmentIfNotExists,
         createApplicationIfNotExists: optionalInputs.createApplicationIfNotExists,
         waitForDeployment: optionalInputs.waitForDeployment,

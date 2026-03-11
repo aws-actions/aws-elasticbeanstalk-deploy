@@ -17,6 +17,7 @@ export interface Inputs {
     createS3BucketIfNotExists: boolean;
     s3BucketName?: string;
     cnamePrefix?: string;
+    sourceDirectory?: string;
     excludePatterns: string;
     optionSettings?: string;
 }
