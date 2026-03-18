@@ -22830,10 +22830,7 @@ class XmlNode {
     }
 }
 
-Object.defineProperty(exports, "parseXML", ({
-    enumerable: true,
-    get: function () { return xmlParser.parseXML; }
-}));
+exports.parseXML = xmlParser.parseXML;
 exports.XmlNode = XmlNode;
 exports.XmlText = XmlText;
 
@@ -22856,6 +22853,7 @@ const parser = new fast_xml_parser_1.XMLParser({
     parseTagValue: false,
     trimValues: false,
     tagValueProcessor: (_, val) => (val.trim() === "" && val.includes("\n") ? "" : undefined),
+    maxNestedTags: 1024,
 });
 parser.addEntity("#xD", "\r");
 parser.addEntity("#10", "\n");
