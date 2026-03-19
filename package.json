@@ -37,7 +37,9 @@
     "@aws-sdk/client-elastic-beanstalk": "^3.928.0",
     "@aws-sdk/client-s3": "^3.478.0",
     "@aws-sdk/client-sts": "^3.478.0",
-    "archiver": "^7.0.1"
+    "archiver": "^7.0.1",
+    "ignore": "^7.0.5",
+    "micromatch": "^4.0.8"
   },
   "devDependencies": {
     "@actions/exec": "^1.1.1",

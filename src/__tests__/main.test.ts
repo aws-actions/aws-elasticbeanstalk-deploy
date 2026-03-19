@@ -21,6 +21,7 @@ jest.mock('fs', () => ({
   writeFileSync: jest.fn(),
   existsSync: jest.fn(),
   statSync: jest.fn(),
+  readdirSync: jest.fn(() => []),
   createReadStream: jest.fn(() => 'mock-stream'),
   createWriteStream: jest.fn(() => ({
     on: jest.fn((event, callback) => {
@@ -42,6 +43,8 @@ jest.mock('path', () => ({
     const parts = p.split('.');
     return parts.length > 1 ? '.' + parts[parts.length - 1] : '';
   }),
+  join: jest.fn((...args) => args.join('/')),
+  relative: jest.fn((from, to) => to),
 }));
 
 jest.mock('archiver', () => {
@@ -91,7 +94,7 @@ import * as fs from 'fs';
 
 // Import functions to test
 import { run } from '../main';
-import { createDeploymentPackage } from '../deploymentpackage';
+import { createDeploymentPackage, loadIgnorePatterns } from '../deploymentpackage';
 import {
   retryWithBackoff,
   getAwsAccountId,
@@ -660,6 +663,38 @@ describe('Main Functions', () => {
       expect(mockedCore.setFailed).toHaveBeenCalledWith(
         'Deployment failed: Either solution-stack-name or platform-arn must be provided when creating a new environment',
       );
+    });
+  });
+
+  describe('loadIgnorePatterns', () => {
+    it('should use .ebignore when present', () => {
+      mockedFs.existsSync.mockImplementation((p: any) => {
+        return String(p).endsWith('.ebignore');
+      });
+      mockedFs.readFileSync.mockReturnValue('node_modules\n.env\n');
+
+      const result = loadIgnorePatterns('/workspace');
+      expect(result).toEqual({ content: 'node_modules\n.env\n', source: '.ebignore' });
+      expect(mockedCore.info).toHaveBeenCalledWith(expect.stringContaining('.ebignore'));
+    });
+
+    it('should fall back to .gitignore when .ebignore is absent', () => {
+      mockedFs.existsSync.mockImplementation((p: any) => {
+        return String(p).endsWith('.gitignore');
+      });
+      mockedFs.readFileSync.mockReturnValue('node_modules\n');
+
+      const result = loadIgnorePatterns('/workspace');
+      expect(result).toEqual({ content: 'node_modules\n', source: '.gitignore' });
+      expect(mockedCore.info).toHaveBeenCalledWith(expect.stringContaining('.gitignore'));
+    });
+
+    it('should return null when neither file exists', () => {
+      mockedFs.existsSync.mockReturnValue(false);
+
+      const result = loadIgnorePatterns('/workspace');
+      expect(result).toBeNull();
+      expect(mockedCore.info).toHaveBeenCalledWith(expect.stringContaining('No .ebignore or .gitignore found'));
     });
   });
 });
