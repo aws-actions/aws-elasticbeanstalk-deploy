@@ -101824,6 +101824,8 @@ exports.AWSClients = void 0;
 const client_elastic_beanstalk_1 = __nccwpck_require__(76114);
 const client_s3_1 = __nccwpck_require__(53711);
 const client_sts_1 = __nccwpck_require__(71695);
+const package_json_1 = __nccwpck_require__(8330);
+const customUserAgent = [['aws-elasticbeanstalk-deploy', package_json_1.version]];
 /**
  * Manages AWS SDK clients as singletons to avoid recreating instances
  * for every operation.
@@ -101834,9 +101836,9 @@ class AWSClients {
     s3Client;
     stsClient;
     constructor(region) {
-        this.ebClient = new client_elastic_beanstalk_1.ElasticBeanstalkClient({ region });
-        this.s3Client = new client_s3_1.S3Client({ region });
-        this.stsClient = new client_sts_1.STSClient({ region });
+        this.ebClient = new client_elastic_beanstalk_1.ElasticBeanstalkClient({ region, customUserAgent });
+        this.s3Client = new client_s3_1.S3Client({ region, customUserAgent });
+        this.stsClient = new client_sts_1.STSClient({ region, customUserAgent });
     }
     /**
      * Get or create AWSClients instance for a specific region
@@ -112109,6 +112111,14 @@ module.exports = /*#__PURE__*/JSON.parse('{"name":"@aws-sdk/client-s3","descript
 
 "use strict";
 module.exports = /*#__PURE__*/JSON.parse('{"name":"@aws-sdk/client-sts","description":"AWS SDK for JavaScript Sts Client for Node.js, Browser and React Native","version":"3.985.0","scripts":{"build":"concurrently \'yarn:build:types\' \'yarn:build:es\' && yarn build:cjs","build:cjs":"node ../../scripts/compilation/inline client-sts","build:es":"tsc -p tsconfig.es.json","build:include:deps":"yarn g:turbo run build -F=\\"$npm_package_name\\"","build:types":"premove ./dist-types tsconfig.types.tsbuildinfo && tsc -p tsconfig.types.json","build:types:downlevel":"downlevel-dts dist-types dist-types/ts3.4","clean":"premove dist-cjs dist-es dist-types tsconfig.cjs.tsbuildinfo tsconfig.es.tsbuildinfo tsconfig.types.tsbuildinfo","extract:docs":"api-extractor run --local","generate:client":"node ../../scripts/generate-clients/single-service --solo sts","test":"yarn g:vitest run","test:e2e":"yarn g:vitest run -c vitest.config.e2e.mts --mode development","test:e2e:watch":"yarn g:vitest watch -c vitest.config.e2e.mts","test:index":"tsc --noEmit ./test/index-types.ts && node ./test/index-objects.spec.mjs","test:watch":"yarn g:vitest watch"},"main":"./dist-cjs/index.js","types":"./dist-types/index.d.ts","module":"./dist-es/index.js","sideEffects":false,"dependencies":{"@aws-crypto/sha256-browser":"5.2.0","@aws-crypto/sha256-js":"5.2.0","@aws-sdk/core":"^3.973.7","@aws-sdk/credential-provider-node":"^3.972.6","@aws-sdk/middleware-host-header":"^3.972.3","@aws-sdk/middleware-logger":"^3.972.3","@aws-sdk/middleware-recursion-detection":"^3.972.3","@aws-sdk/middleware-user-agent":"^3.972.7","@aws-sdk/region-config-resolver":"^3.972.3","@aws-sdk/types":"^3.973.1","@aws-sdk/util-endpoints":"3.985.0","@aws-sdk/util-user-agent-browser":"^3.972.3","@aws-sdk/util-user-agent-node":"^3.972.5","@smithy/config-resolver":"^4.4.6","@smithy/core":"^3.22.1","@smithy/fetch-http-handler":"^5.3.9","@smithy/hash-node":"^4.2.8","@smithy/invalid-dependency":"^4.2.8","@smithy/middleware-content-length":"^4.2.8","@smithy/middleware-endpoint":"^4.4.13","@smithy/middleware-retry":"^4.4.30","@smithy/middleware-serde":"^4.2.9","@smithy/middleware-stack":"^4.2.8","@smithy/node-config-provider":"^4.3.8","@smithy/node-http-handler":"^4.4.9","@smithy/protocol-http":"^5.3.8","@smithy/smithy-client":"^4.11.2","@smithy/types":"^4.12.0","@smithy/url-parser":"^4.2.8","@smithy/util-base64":"^4.3.0","@smithy/util-body-length-browser":"^4.2.0","@smithy/util-body-length-node":"^4.2.1","@smithy/util-defaults-mode-browser":"^4.3.29","@smithy/util-defaults-mode-node":"^4.2.32","@smithy/util-endpoints":"^3.2.8","@smithy/util-middleware":"^4.2.8","@smithy/util-retry":"^4.2.8","@smithy/util-utf8":"^4.2.0","tslib":"^2.6.2"},"devDependencies":{"@tsconfig/node20":"20.1.8","@types/node":"^20.14.8","concurrently":"7.0.0","downlevel-dts":"0.10.1","premove":"4.0.0","typescript":"~5.8.3"},"engines":{"node":">=20.0.0"},"typesVersions":{"<4.0":{"dist-types/*":["dist-types/ts3.4/*"]}},"files":["dist-*/**"],"author":{"name":"AWS SDK for JavaScript Team","url":"https://aws.amazon.com/javascript/"},"license":"Apache-2.0","browser":{"./dist-es/runtimeConfig":"./dist-es/runtimeConfig.browser"},"react-native":{"./dist-es/runtimeConfig":"./dist-es/runtimeConfig.native"},"homepage":"https://github.com/aws/aws-sdk-js-v3/tree/main/clients/client-sts","repository":{"type":"git","url":"https://github.com/aws/aws-sdk-js-v3.git","directory":"clients/client-sts"}}');
+
+/***/ }),
+
+/***/ 8330:
+/***/ ((module) => {
+
+"use strict";
+module.exports = /*#__PURE__*/JSON.parse('{"name":"aws-elasticbeanstalk-deploy","version":"0.1.0","description":"Deploy applications to AWS Elastic Beanstalk","repository":{"type":"git","url":"git+https://github.com/aws-actions/aws-elasticbeanstalk-deploy.git"},"homepage":"https://github.com/aws-actions/aws-elasticbeanstalk-deploy","engines":{"node":">=24"},"scripts":{"clean":"rm -rf dist && rm -rf node_modules","build":"ncc build src/main.ts -o dist --source-map --license licenses.txt","watch":"tsc -w","format":"prettier --write \'**/*.ts\'","package":"ncc build src/main.ts -o dist --source-map --license licenses.txt","prepublishOnly":"npm run build && npm run test","test":"jest --collectCoverage --collectCoverageFrom=src/**/*.{ts,js}"},"main":"dist/index.js","exports":"dist/index.js","files":["dist/","action.yml","!**/__tests__/**"],"keywords":["aws","elastic-beanstalk","deployment","github-actions"],"dependencies":{"@actions/core":"^1.10.1","@aws-sdk/client-elastic-beanstalk":"^3.928.0","@aws-sdk/client-s3":"^3.478.0","@aws-sdk/client-sts":"^3.478.0","archiver":"^7.0.1","ignore":"^7.0.5"},"devDependencies":{"@actions/exec":"^1.1.1","@types/archiver":"^6.0.2","@types/jest":"^29.5.12","@types/node":"^24.0.0","@vercel/ncc":"^0.38.1","jest":"^29.7.0","ts-jest":"^29.2.4","typescript":"~5.4.5"},"overrides":{"fast-xml-parser":">=5.3.8","undici":">=6.23.0"}}');
 
 /***/ })
 
