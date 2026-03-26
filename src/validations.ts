@@ -182,7 +182,7 @@ function checkInputConflicts(inputs: Partial<Inputs>): void {
   if (inputs.deploymentPackagePath && inputs.excludePatterns !== '') {
     core.warning(
       'Both deployment-package-path and exclude-patterns are specified. ' +
-      'exclude-patterns will be ignored since deployment-package-path takes precedence.'
+      'exclude-patterns and .ebignore/.gitignore patterns will be ignored since deployment-package-path takes precedence.'
     );
   }
 

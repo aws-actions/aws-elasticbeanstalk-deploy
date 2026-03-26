@@ -1,6 +1,75 @@
 import * as core from '@actions/core';
 import * as fs from 'fs';
+import * as path from 'path';
 import archiver from 'archiver';
+import ignore, { Ignore } from 'ignore';
+
+/**
+ * Loads ignore patterns from .ebignore or .gitignore (EB CLI behavior).
+ * Returns the file content and source name, or null if neither file exists.
+ */
+export function loadIgnorePatterns(cwd: string): { content: string; source: string } | null {
+  const ebignorePath = path.join(cwd, '.ebignore');
+  if (fs.existsSync(ebignorePath)) {
+    const content = fs.readFileSync(ebignorePath, 'utf-8');
+    core.info(`📄 Using ignore patterns from .ebignore`);
+    return { content, source: '.ebignore' };
+  }
+
+  const gitignorePath = path.join(cwd, '.gitignore');
+  if (fs.existsSync(gitignorePath)) {
+    const content = fs.readFileSync(gitignorePath, 'utf-8');
+    core.info(`📄 Using ignore patterns from .gitignore (no .ebignore found)`);
+    return { content, source: '.gitignore' };
+  }
+
+  core.info('📄 No .ebignore or .gitignore found; no file-based exclusions applied');
+  return null;
+}
+
+/**
+ * Recursively walks a directory, invoking a callback for each non-ignored file.
+ * Normalizes path separators to forward slashes for cross-platform compatibility.
+ * Skips ignored directories early to avoid unnecessary I/O, and skips symlinks
+ * to prevent infinite recursion from circular symlinks.
+ */
+export function walkFiles(
+  dir: string,
+  zipFileName: string,
+  callback: (relativePath: string) => void,
+  ig?: Ignore,
+  baseDir?: string
+): void {
+  const root = baseDir ?? dir;
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err: any) {
+    core.warning(`Skipping unreadable directory: ${dir} (${err.code ?? err.message})`);
+    return;
+  }
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+
+    // Skip symlinks to prevent infinite recursion from circular symlinks
+    if (entry.isSymbolicLink()) continue;
+
+    const relativePath = path.relative(root, fullPath).replace(/\\/g, '/');
+
+    if (entry.isDirectory()) {
+      // Skip ignored directories early to avoid unnecessary traversal
+      if (ig && ig.ignores(relativePath + '/')) continue;
+      walkFiles(fullPath, zipFileName, callback, ig, root);
+    } else {
+      if (relativePath === zipFileName) continue;
+      // Skip ignored files during traversal
+      if (ig && ig.ignores(relativePath)) continue;
+      callback(relativePath);
+    }
+  }
+}
 
 /**
  * Creates a deployment package for Elastic Beanstalk
@@ -16,7 +85,6 @@ export async function createDeploymentPackage(
   sourceDirectory?: string
 ): Promise<{ path: string }> {
   if (packagePath) {
-    // deployment-package-path explicitly provided by user
     if (!fs.existsSync(packagePath)) {
       throw new Error(
         `deployment-package-path '${packagePath}' does not exist. ` +
@@ -36,7 +104,6 @@ export async function createDeploymentPackage(
     return { path: packagePath };
   }
 
-  // No explicit package path provided – create a new deployment package from the workspace.
   const zipFileName = `deploy-${versionLabel}.zip`;
   core.info(`📦 Creating deployment package: ${zipFileName}`);
 
@@ -45,15 +112,26 @@ export async function createDeploymentPackage(
     .map(p => p.trim())
     .filter(p => p.length > 0);
 
-  await createZipFile(zipFileName, excludePatterns, sourceDirectory);
+  const effectiveDir = sourceDirectory ?? process.cwd();
+  const ignoreFile = loadIgnorePatterns(effectiveDir);
+  const ignoreFileContent = ignoreFile ? ignoreFile.content : null;
+
+  await createZipFile(zipFileName, excludePatterns, ignoreFileContent, sourceDirectory);
 
   return { path: zipFileName };
 }
 
 /**
- * Creates a zip file using archiver
+ * Creates a zip file using archiver.
+ * When ignoreFileContent is provided, walks the file tree and filters with the ignore library.
+ * Otherwise, uses archive.glob() for backward compatibility.
  */
-async function createZipFile(zipFileName: string, excludePatterns: string[], sourceDirectory?: string): Promise<void> {
+export async function createZipFile(
+  zipFileName: string,
+  excludePatterns: string[],
+  ignoreFileContent: string | null,
+  sourceDirectory?: string
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const output = fs.createWriteStream(zipFileName);
     const archive = archiver('zip');
@@ -63,7 +141,22 @@ async function createZipFile(zipFileName: string, excludePatterns: string[], sou
     archive.on('error', reject);
 
     archive.pipe(output);
-    archive.glob('**/*', { cwd: sourceDirectory, ignore: excludePatterns, dot: true });
+
+    const effectiveDir = sourceDirectory ?? process.cwd();
+
+    if (ignoreFileContent) {
+      const ig = ignore().add(ignoreFileContent);
+      if (excludePatterns.length > 0) {
+        ig.add(excludePatterns);
+      }
+
+      walkFiles(effectiveDir, zipFileName, (relativePath) => {
+        archive.file(path.join(effectiveDir, relativePath), { name: relativePath });
+      }, ig);
+    } else {
+      archive.glob('**/*', { cwd: sourceDirectory, ignore: excludePatterns, dot: true });
+    }
+
     archive.finalize();
   });
 }

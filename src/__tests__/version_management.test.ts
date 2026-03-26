@@ -2,7 +2,18 @@ import { applicationVersionExists, getVersionS3Location, createApplicationVersio
 import { AWSClients } from '../aws-clients';
 
 // Mock dependencies
-jest.mock('@actions/core');
+jest.mock('@actions/core', () => ({
+  getInput: jest.fn(),
+  getBooleanInput: jest.fn(),
+  setFailed: jest.fn(),
+  setOutput: jest.fn(),
+  info: jest.fn(),
+  warning: jest.fn(),
+  error: jest.fn(),
+  debug: jest.fn(),
+  startGroup: jest.fn(),
+  endGroup: jest.fn(),
+}));
 
 const mockSend = jest.fn();
 jest.mock('@aws-sdk/client-elastic-beanstalk', () => ({
