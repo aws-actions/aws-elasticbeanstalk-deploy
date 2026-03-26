@@ -94,7 +94,7 @@ import * as fs from 'fs';
 
 // Import functions to test
 import { run } from '../main';
-import { createDeploymentPackage, loadIgnorePatterns } from '../deploymentpackage';
+import { createDeploymentPackage, loadIgnorePatterns, walkFiles, createZipFile } from '../deploymentpackage';
 import {
   retryWithBackoff,
   getAwsAccountId,
@@ -662,6 +662,297 @@ describe('Main Functions', () => {
 
       expect(mockedCore.setFailed).toHaveBeenCalledWith(
         'Deployment failed: Either solution-stack-name or platform-arn must be provided when creating a new environment',
+      );
+    });
+  });
+
+  describe('walkFiles', () => {
+    const mockedPath = require('path') as jest.Mocked<typeof import('path')>;
+    let originalRelative: any;
+
+    function makeDirent(name: string, opts: { isDir?: boolean; isSymlink?: boolean } = {}) {
+      return {
+        name,
+        isDirectory: () => !!opts.isDir,
+        isSymbolicLink: () => !!opts.isSymlink,
+        isFile: () => !opts.isDir && !opts.isSymlink,
+      };
+    }
+
+    function collectFiles(dir: string, zipFileName: string, ig?: any): string[] {
+      const files: string[] = [];
+      walkFiles(dir, zipFileName, (rel) => files.push(rel), ig);
+      return files;
+    }
+
+    beforeEach(() => {
+      originalRelative = mockedPath.relative;
+      mockedPath.relative.mockImplementation((from: string, to: string) => {
+        if (to.startsWith(from + '/')) {
+          return to.slice(from.length + 1);
+        }
+        return to;
+      });
+    });
+
+    afterEach(() => {
+      mockedPath.relative.mockImplementation(originalRelative.getMockImplementation() || ((from: string, to: string) => to));
+    });
+
+    it('should return all files relative to root', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            makeDirent('app.js'),
+            makeDirent('README.md'),
+          ] as any;
+        }
+        return [] as any;
+      });
+
+      const files = collectFiles('/project', 'deploy.zip');
+      expect(files).toEqual(['app.js', 'README.md']);
+    });
+
+    it('should recurse into subdirectories', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [makeDirent('src', { isDir: true }), makeDirent('index.js')] as any;
+        }
+        if (String(dir) === '/project/src') {
+          return [makeDirent('main.ts')] as any;
+        }
+        return [] as any;
+      });
+
+      const files = collectFiles('/project', 'deploy.zip');
+      expect(files).toEqual(['src/main.ts', 'index.js']);
+    });
+
+    it('should skip ignored directories early when ig is provided', () => {
+      const ignoreLib = require('ignore');
+      const ig = ignoreLib.default().add('node_modules');
+
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            makeDirent('node_modules', { isDir: true }),
+            makeDirent('src', { isDir: true }),
+          ] as any;
+        }
+        if (String(dir) === '/project/src') {
+          return [makeDirent('app.ts')] as any;
+        }
+        // If node_modules is entered, fail the test
+        if (String(dir).includes('node_modules')) {
+          throw new Error('Should not traverse into node_modules');
+        }
+        return [] as any;
+      });
+
+      const files = collectFiles('/project', 'deploy.zip', ig);
+      expect(files).toEqual(['src/app.ts']);
+    });
+
+    it('should support negation patterns to re-include ignored files', () => {
+      const ignoreLib = require('ignore');
+      const ig = ignoreLib.default().add('*.log\n!important.log');
+
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            makeDirent('debug.log'),
+            makeDirent('important.log'),
+            makeDirent('app.js'),
+          ] as any;
+        }
+        return [] as any;
+      });
+
+      const files = collectFiles('/project', 'deploy.zip', ig);
+      expect(files).toEqual(['important.log', 'app.js']);
+      expect(files).not.toContain('debug.log');
+    });
+
+    it('should skip symlinks to prevent circular recursion', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            makeDirent('link-to-parent', { isSymlink: true }),
+            makeDirent('real-file.js'),
+          ] as any;
+        }
+        return [] as any;
+      });
+
+      const files = collectFiles('/project', 'deploy.zip');
+      expect(files).toEqual(['real-file.js']);
+    });
+
+    it('should exclude the zip file itself', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [makeDirent('deploy.zip'), makeDirent('app.js')] as any;
+        }
+        return [] as any;
+      });
+
+      const files = collectFiles('/project', 'deploy.zip');
+      expect(files).toEqual(['app.js']);
+    });
+
+    it('should skip nested ignored directories', () => {
+      const ignoreLib = require('ignore');
+      const ig = ignoreLib.default().add('dist');
+
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [makeDirent('src', { isDir: true }), makeDirent('index.js')] as any;
+        }
+        if (String(dir) === '/project/src') {
+          return [makeDirent('dist', { isDir: true }), makeDirent('app.ts')] as any;
+        }
+        if (String(dir).includes('dist')) {
+          throw new Error('Should not traverse into nested dist');
+        }
+        return [] as any;
+      });
+
+      const files = collectFiles('/project', 'deploy.zip', ig);
+      expect(files).toEqual(['src/app.ts', 'index.js']);
+      expect(files).not.toContain('dist');
+    });
+
+    it('should skip unreadable directories with a warning', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [makeDirent('secret', { isDir: true }), makeDirent('app.js')] as any;
+        }
+        if (String(dir) === '/project/secret') {
+          const err: any = new Error('EACCES: permission denied');
+          err.code = 'EACCES';
+          throw err;
+        }
+        return [] as any;
+      });
+
+      const files = collectFiles('/project', 'deploy.zip');
+      expect(files).toEqual(['app.js']);
+      expect(mockedCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Skipping unreadable directory')
+      );
+    });
+  });
+
+  describe('createZipFile with ignore filtering', () => {
+    const mockedPath = require('path') as jest.Mocked<typeof import('path')>;
+    let originalRelative: any;
+
+    beforeEach(() => {
+      originalRelative = mockedPath.relative;
+      mockedPath.relative.mockImplementation((from: string, to: string) => {
+        if (to.startsWith(from + '/')) {
+          return to.slice(from.length + 1);
+        }
+        return to;
+      });
+    });
+
+    afterEach(() => {
+      mockedPath.relative.mockImplementation(originalRelative.getMockImplementation() || ((from: string, to: string) => to));
+    });
+
+    it('should filter files using ignore patterns and add only matching files', async () => {
+      const archiver = require('archiver');
+      const mockArchiveInstance = archiver();
+      mockArchiveInstance.file = jest.fn();
+
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            {
+              name: 'app.js',
+              isDirectory: () => false,
+              isSymbolicLink: () => false,
+              isFile: () => true,
+            },
+            {
+              name: '.env',
+              isDirectory: () => false,
+              isSymbolicLink: () => false,
+              isFile: () => true,
+            },
+            {
+              name: 'README.md',
+              isDirectory: () => false,
+              isSymbolicLink: () => false,
+              isFile: () => true,
+            },
+          ] as any;
+        }
+        return [] as any;
+      });
+
+      await createZipFile('deploy.zip', [], '.env\n', '/project');
+
+      const fileNames = mockArchiveInstance.file.mock.calls.map((c: any[]) => c[1].name);
+      expect(fileNames).toContain('app.js');
+      expect(fileNames).toContain('README.md');
+      expect(fileNames).not.toContain('.env');
+
+      delete mockArchiveInstance.file;
+    });
+
+    it('should apply exclude patterns on top of ignore patterns', async () => {
+      const archiver = require('archiver');
+      const mockArchiveInstance = archiver();
+      mockArchiveInstance.file = jest.fn();
+
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            {
+              name: 'app.js',
+              isDirectory: () => false,
+              isSymbolicLink: () => false,
+              isFile: () => true,
+            },
+            {
+              name: 'debug.log',
+              isDirectory: () => false,
+              isSymbolicLink: () => false,
+              isFile: () => true,
+            },
+            {
+              name: 'README.md',
+              isDirectory: () => false,
+              isSymbolicLink: () => false,
+              isFile: () => true,
+            },
+          ] as any;
+        }
+        return [] as any;
+      });
+
+      await createZipFile('deploy.zip', ['*.log'], '# no ignores\n', '/project');
+
+      const fileNames = mockArchiveInstance.file.mock.calls.map((c: any[]) => c[1].name);
+      expect(fileNames).toContain('app.js');
+      expect(fileNames).toContain('README.md');
+      expect(fileNames).not.toContain('debug.log');
+
+      delete mockArchiveInstance.file;
+    });
+
+    it('should use glob path when ignore content is empty', async () => {
+      const archiver = require('archiver');
+      const mockArchiveInstance = archiver();
+
+      await createZipFile('deploy.zip', ['*.log'], '', '/project');
+
+      expect(mockArchiveInstance.glob).toHaveBeenCalledWith(
+        '**/*',
+        expect.objectContaining({ cwd: '/project', ignore: ['*.log'] })
       );
     });
   });

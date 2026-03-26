@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import * as fs from 'fs';
 import * as path from 'path';
 import archiver from 'archiver';
-import ignore from 'ignore';
+import ignore, { Ignore } from 'ignore';
 
 /**
  * Loads ignore patterns from .ebignore or .gitignore (EB CLI behavior).
@@ -28,27 +28,47 @@ export function loadIgnorePatterns(cwd: string): { content: string; source: stri
 }
 
 /**
- * Recursively walks a directory and returns all file paths relative to dir.
+ * Recursively walks a directory, invoking a callback for each non-ignored file.
  * Normalizes path separators to forward slashes for cross-platform compatibility.
+ * Skips ignored directories early to avoid unnecessary I/O, and skips symlinks
+ * to prevent infinite recursion from circular symlinks.
  */
-export function getAllFiles(dir: string, zipFileName: string, baseDir?: string): string[] {
+export function walkFiles(
+  dir: string,
+  zipFileName: string,
+  callback: (relativePath: string) => void,
+  ig?: Ignore,
+  baseDir?: string
+): void {
   const root = baseDir ?? dir;
-  const files: string[] = [];
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err: any) {
+    core.warning(`Skipping unreadable directory: ${dir} (${err.code ?? err.message})`);
+    return;
+  }
 
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
+
+    // Skip symlinks to prevent infinite recursion from circular symlinks
+    if (entry.isSymbolicLink()) continue;
+
     const relativePath = path.relative(root, fullPath).replace(/\\/g, '/');
 
     if (entry.isDirectory()) {
-      files.push(...getAllFiles(fullPath, zipFileName, root));
+      // Skip ignored directories early to avoid unnecessary traversal
+      if (ig && ig.ignores(relativePath + '/')) continue;
+      walkFiles(fullPath, zipFileName, callback, ig, root);
     } else {
       if (relativePath === zipFileName) continue;
-      files.push(relativePath);
+      // Skip ignored files during traversal
+      if (ig && ig.ignores(relativePath)) continue;
+      callback(relativePath);
     }
   }
-
-  return files;
 }
 
 /**
@@ -124,21 +144,15 @@ export async function createZipFile(
 
     const effectiveDir = sourceDirectory ?? process.cwd();
 
-    if (ignoreFileContent !== null) {
+    if (ignoreFileContent) {
       const ig = ignore().add(ignoreFileContent);
-      const allFiles = getAllFiles(effectiveDir, zipFileName);
-
-      let filteredFiles = ig.filter(allFiles);
-
       if (excludePatterns.length > 0) {
-        const micromatch = require('micromatch');
-        filteredFiles = micromatch.not(filteredFiles, excludePatterns, { dot: true });
+        ig.add(excludePatterns);
       }
 
-      for (const file of filteredFiles) {
-        const fullPath = path.join(effectiveDir, file);
-        archive.file(fullPath, { name: file });
-      }
+      walkFiles(effectiveDir, zipFileName, (relativePath) => {
+        archive.file(path.join(effectiveDir, relativePath), { name: relativePath });
+      }, ig);
     } else {
       archive.glob('**/*', { cwd: sourceDirectory, ignore: excludePatterns, dot: true });
     }
