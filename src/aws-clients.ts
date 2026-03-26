@@ -1,6 +1,10 @@
 import { ElasticBeanstalkClient } from '@aws-sdk/client-elastic-beanstalk';
 import { S3Client } from '@aws-sdk/client-s3';
 import { STSClient } from '@aws-sdk/client-sts';
+import { UserAgent } from '@aws-sdk/types';
+import { version } from '../package.json';
+
+const customUserAgent: UserAgent = [['aws-elasticbeanstalk-deploy', version]];
 
 /**
  * Manages AWS SDK clients as singletons to avoid recreating instances
@@ -14,9 +18,9 @@ export class AWSClients {
   private readonly stsClient: STSClient;
 
   private constructor(region: string) {
-    this.ebClient = new ElasticBeanstalkClient({ region });
-    this.s3Client = new S3Client({ region });
-    this.stsClient = new STSClient({ region });
+    this.ebClient = new ElasticBeanstalkClient({ region, customUserAgent });
+    this.s3Client = new S3Client({ region, customUserAgent });
+    this.stsClient = new STSClient({ region, customUserAgent });
   }
 
   /**
