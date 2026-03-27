@@ -42685,7 +42685,7 @@ function expand(str, isTop) {
       var y = numeric(n[1]);
       var width = Math.max(n[0].length, n[1].length)
       var incr = n.length == 3
-        ? Math.abs(numeric(n[2]))
+        ? Math.max(Math.abs(numeric(n[2])), 1)
         : 1;
       var test = lte;
       var reverse = y < x;
@@ -42737,7 +42737,6 @@ function expand(str, isTop) {
 
   return expansions;
 }
-
 
 
 /***/ }),
@@ -106977,7 +106976,7 @@ const slashPattern = /\\\\/g;
 const openPattern = /\\{/g;
 const closePattern = /\\}/g;
 const commaPattern = /\\,/g;
-const periodPattern = /\\./g;
+const periodPattern = /\\\./g;
 exports.EXPANSION_MAX = 100_000;
 function numeric(str) {
     return !isNaN(str) ? parseInt(str, 10) : str.charCodeAt(0);
@@ -107104,7 +107103,9 @@ function expand_(str, max, isTop) {
             const x = numeric(n[0]);
             const y = numeric(n[1]);
             const width = Math.max(n[0].length, n[1].length);
-            let incr = n.length === 3 && n[2] !== undefined ? Math.abs(numeric(n[2])) : 1;
+            let incr = n.length === 3 && n[2] !== undefined ?
+                Math.max(Math.abs(numeric(n[2])), 1)
+                : 1;
             let test = lte;
             const reverse = y < x;
             if (reverse) {
