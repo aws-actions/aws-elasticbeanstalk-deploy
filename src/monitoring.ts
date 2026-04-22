@@ -179,6 +179,8 @@ export async function waitForDeploymentCompletion(
 /**
  * Wait for environment health to recover
  */
+export const CONSECUTIVE_RED_THRESHOLD = 3;
+
 export async function waitForHealthRecovery(
   clients: AWSClients,
   applicationName: string,
@@ -194,6 +196,7 @@ export async function waitForHealthRecovery(
   let previousStatus: string | undefined;
   let previousHealth: string | undefined;
   let lastSeenEventDate: Date | undefined = lastEventDateFromDeployment;
+  let consecutiveRedReadyCount = 0;
 
   while (Date.now() - startTime < maxWait) {
     const command = new DescribeEnvironmentsCommand({
@@ -233,8 +236,19 @@ export async function waitForHealthRecovery(
         }
 
         if (health === 'Red' && status === 'Ready') {
-          throw new Error('Environment health recovery failed - health is Red');
+          consecutiveRedReadyCount++;
+          if (consecutiveRedReadyCount >= CONSECUTIVE_RED_THRESHOLD) {
+            throw new Error('Environment health recovery failed - health is Red');
+          }
+          core.warning(
+            `Health is Red while status is Ready (${consecutiveRedReadyCount}/${CONSECUTIVE_RED_THRESHOLD}), ` +
+            'waiting for possible recovery...'
+          );
+        } else {
+          consecutiveRedReadyCount = 0;
         }
+      } else {
+        consecutiveRedReadyCount = 0;
       }
 
       if (status !== previousStatus || health !== previousHealth) {

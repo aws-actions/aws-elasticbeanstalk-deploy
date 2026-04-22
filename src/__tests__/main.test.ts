@@ -103,7 +103,7 @@ import {
   createEnvironment,
   getEnvironmentInfo,
 } from '../aws-operations';
-import { waitForDeploymentCompletion, waitForHealthRecovery } from '../monitoring';
+import { waitForDeploymentCompletion, waitForHealthRecovery, CONSECUTIVE_RED_THRESHOLD } from '../monitoring';
 import { AWSClients } from '../aws-clients';
 
 const mockedCore = core as jest.Mocked<typeof core>;
@@ -435,22 +435,111 @@ describe('Main Functions', () => {
       expect(mockSend).toHaveBeenCalled();
     });
 
-    it('should throw error for red health', async () => {
-      mockSend
-        .mockResolvedValueOnce({
+    it('should throw error after consecutive Red+Ready health checks exceed threshold', async () => {
+      jest.useFakeTimers();
+      // Each poll iteration does: DescribeEnvironments (Red+Ready) then DescribeEvents (no errors)
+      // We need CONSECUTIVE_RED_THRESHOLD iterations to trigger the failure
+      mockSend.mockImplementation((command: any) => {
+        if (command.input?.MaxRecords) {
+          // DescribeEvents - no error events
+          return Promise.resolve({ Events: [] });
+        }
+        // DescribeEnvironments - always Red+Ready
+        return Promise.resolve({
           Environments: [{ Health: 'Red', Status: 'Ready' }],
-        })
-        .mockResolvedValueOnce({
-          Events: [
-            {
-              EventDate: new Date('2025-01-01'),
-              Severity: 'ERROR',
-              Message: 'Deployment failed'
-            }
-          ]
         });
-      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1))
-        .rejects.toThrow('Environment health recovery failed - health is Red');
+      });
+      const promise = waitForHealthRecovery(mockClients, 'app', 'env', 900);
+      // Advance timers past enough poll intervals for the threshold to be reached
+      for (let i = 0; i < CONSECUTIVE_RED_THRESHOLD + 1; i++) {
+        await Promise.resolve(); // flush microtasks for async work
+        await Promise.resolve();
+        await Promise.resolve();
+        jest.advanceTimersByTime(15000);
+      }
+      await expect(promise).rejects.toThrow('Environment health recovery failed - health is Red');
+      jest.useRealTimers();
+    });
+
+    it('should recover if health turns Green before reaching Red threshold', async () => {
+      jest.useFakeTimers();
+      let callCount = 0;
+      mockSend.mockImplementation((command: any) => {
+        if (command.input?.MaxRecords) {
+          // DescribeEvents - no error events
+          return Promise.resolve({ Events: [] });
+        }
+        callCount++;
+        // First poll: Red+Ready, second poll: Green
+        if (callCount <= 1) {
+          return Promise.resolve({
+            Environments: [{ Health: 'Red', Status: 'Ready' }],
+          });
+        }
+        return Promise.resolve({
+          Environments: [{ Health: 'Green', Status: 'Ready' }],
+        });
+      });
+      const promise = waitForHealthRecovery(mockClients, 'app', 'env', 900);
+      // Advance through two poll cycles
+      for (let i = 0; i < 3; i++) {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        jest.advanceTimersByTime(15000);
+      }
+      // Should NOT throw - transient Red recovers to Green
+      await promise;
+      expect(mockedCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Health is Red while status is Ready (1/')
+      );
+      jest.useRealTimers();
+    });
+
+    it('should reset Red counter when health transitions away from Red+Ready', async () => {
+      jest.useFakeTimers();
+      let callCount = 0;
+      mockSend.mockImplementation((command: any) => {
+        if (command.input?.MaxRecords) {
+          return Promise.resolve({ Events: [] });
+        }
+        callCount++;
+        // Red+Ready, then Updating (resets counter), then Red+Ready, then Green
+        if (callCount === 1) {
+          return Promise.resolve({
+            Environments: [{ Health: 'Red', Status: 'Ready' }],
+          });
+        }
+        if (callCount === 2) {
+          return Promise.resolve({
+            Environments: [{ Health: 'Red', Status: 'Updating' }],
+          });
+        }
+        if (callCount === 3) {
+          return Promise.resolve({
+            Environments: [{ Health: 'Red', Status: 'Ready' }],
+          });
+        }
+        return Promise.resolve({
+          Environments: [{ Health: 'Green', Status: 'Ready' }],
+        });
+      });
+      const promise = waitForHealthRecovery(mockClients, 'app', 'env', 900);
+      // Advance through enough poll cycles
+      for (let i = 0; i < 5; i++) {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        jest.advanceTimersByTime(15000);
+      }
+      await promise;
+      // Counter should have been reset after the Updating status, so only 1/N warnings each time
+      const warningCalls = mockedCore.warning.mock.calls
+        .filter((c: any[]) => String(c[0]).includes('Health is Red while status is Ready'));
+      expect(warningCalls).toHaveLength(2);
+      expect(String(warningCalls[0][0])).toContain('(1/');
+      expect(String(warningCalls[1][0])).toContain('(1/');
+      jest.useRealTimers();
     });
 
     it('should timeout', async () => {
