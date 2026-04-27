@@ -22716,21 +22716,31 @@ exports.defaultUserAgent = defaultUserAgent;
 
 var xmlParser = __nccwpck_require__(43343);
 
+const ATTR_ESCAPE_RE = /[&<>"]/g;
+const ATTR_ESCAPE_MAP = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+};
 function escapeAttribute(value) {
-    return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    return value.replace(ATTR_ESCAPE_RE, (ch) => ATTR_ESCAPE_MAP[ch]);
 }
 
+const ELEMENT_ESCAPE_RE = /[&"'<>\r\n\u0085\u2028]/g;
+const ELEMENT_ESCAPE_MAP = {
+    "&": "&amp;",
+    '"': "&quot;",
+    "'": "&apos;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\r": "&#x0D;",
+    "\n": "&#x0A;",
+    "\u0085": "&#x85;",
+    "\u2028": "&#x2028;",
+};
 function escapeElement(value) {
-    return value
-        .replace(/&/g, "&amp;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&apos;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/\r/g, "&#x0D;")
-        .replace(/\n/g, "&#x0A;")
-        .replace(/\u0085/g, "&#x85;")
-        .replace(/\u2028/, "&#x2028;");
+    return value.replace(ELEMENT_ESCAPE_RE, (ch) => ELEMENT_ESCAPE_MAP[ch]);
 }
 
 class XmlText {
@@ -22847,16 +22857,18 @@ exports.parseXML = parseXML;
 const fast_xml_parser_1 = __nccwpck_require__(50591);
 const parser = new fast_xml_parser_1.XMLParser({
     attributeNamePrefix: "",
+    processEntities: {
+        enabled: true,
+        maxTotalExpansions: Infinity,
+    },
     htmlEntities: true,
     ignoreAttributes: false,
     ignoreDeclaration: true,
     parseTagValue: false,
     trimValues: false,
     tagValueProcessor: (_, val) => (val.trim() === "" && val.includes("\n") ? "" : undefined),
-    maxNestedTags: 1024,
+    maxNestedTags: Infinity,
 });
-parser.addEntity("#xD", "\r");
-parser.addEntity("#10", "\n");
 function parseXML(xmlString) {
     return parser.parse(xmlString, true);
 }
