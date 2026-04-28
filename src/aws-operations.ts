@@ -13,6 +13,7 @@ import { GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import * as fs from 'fs';
 import * as path from 'path';
 import { AWSClients } from './aws-clients';
+import { DeploymentContext, logInfo, logError } from './logging';
 import { parseJsonInput } from './validations';
 
 /**
@@ -35,12 +36,12 @@ export function validateOptionSettingsForCreate(optionSettingsJson: string | und
   let hasServiceRole = false;
 
   for (const setting of parsedSettings) {
-    if (setting.Namespace === 'aws:autoscaling:launchconfiguration' && 
+    if (setting.Namespace === 'aws:autoscaling:launchconfiguration' &&
         setting.OptionName === 'IamInstanceProfile') {
       hasIamInstanceProfile = true;
     }
 
-    if (setting.Namespace === 'aws:elasticbeanstalk:environment' && 
+    if (setting.Namespace === 'aws:elasticbeanstalk:environment' &&
         setting.OptionName === 'ServiceRole') {
       hasServiceRole = true;
     }
@@ -93,13 +94,12 @@ export type AWSS3Region = typeof AWS_S3_REGIONS[number];
  */
 export async function retryWithBackoff<T>(
   fn: () => Promise<T>,
-  maxRetries: number,
-  retryDelay: number,
-  operationName: string
+  operationName: string,
+  ctx: DeploymentContext,
 ): Promise<T> {
   let lastError: Error | undefined;
 
-  const totalAttempts = maxRetries + 1;
+  const totalAttempts = ctx.maxRetries + 1;
 
   for (let attempt = 1; attempt <= totalAttempts; attempt++) {
     try {
@@ -126,16 +126,23 @@ export async function retryWithBackoff<T>(
       lastError = err;
 
       if (attempt < totalAttempts) {
-        const delay = retryDelay * Math.pow(2, attempt - 1);
+        const delay = ctx.retryDelay * Math.pow(2, attempt - 1);
         core.warning(`❌ ${operationName} failed (attempt ${attempt}/${totalAttempts}). Retrying in ${delay}s...`);
         await new Promise(resolve => setTimeout(resolve, delay * 1000));
       }
     }
   }
 
-  const retryWord = maxRetries === 1 ? 'retry' : 'retries';
-  const errorMessage = `${operationName} failed after ${totalAttempts} attempts (${maxRetries} ${retryWord}): ${lastError?.message}`;
-  core.error(errorMessage);
+  const retryWord = ctx.maxRetries === 1 ? 'retry' : 'retries';
+  const errorMessage = `${operationName} failed after ${totalAttempts} attempts (${ctx.maxRetries} ${retryWord}): ${lastError?.message}`;
+  logError(
+    ctx,
+    errorMessage,
+    `${operationName} failed after ${totalAttempts} attempts (${ctx.maxRetries} ${retryWord})`
+  );
+  if (!ctx.verboseLogging) {
+    core.debug(`Retry error detail: ${lastError?.message}`);
+  }
   throw new Error(errorMessage);
 }
 
@@ -144,8 +151,7 @@ export async function retryWithBackoff<T>(
  */
 export async function getAwsAccountId(
   clients: AWSClients,
-  maxRetries: number,
-  retryDelay: number
+  ctx: DeploymentContext,
 ): Promise<string> {
   return retryWithBackoff(
     async () => {
@@ -153,9 +159,8 @@ export async function getAwsAccountId(
       const response = await clients.getSTSClient().send(command);
       return response.Account!;
     },
-    maxRetries,
-    retryDelay,
-    'Get AWS Account ID'
+    'Get AWS Account ID',
+    ctx,
   );
 }
 
@@ -165,7 +170,8 @@ export async function getAwsAccountId(
 export async function applicationVersionExists(
   clients: AWSClients,
   applicationName: string,
-  versionLabel: string
+  versionLabel: string,
+  ctx: DeploymentContext,
 ): Promise<boolean> {
   try {
     const command = new DescribeApplicationVersionsCommand({
@@ -176,7 +182,9 @@ export async function applicationVersionExists(
     const response = await clients.getElasticBeanstalkClient().send(command);
     return (response.ApplicationVersions?.length ?? 0) > 0;
   } catch (error) {
-    core.debug(`Error checking application version ${versionLabel} existence: ${error}`);
+    core.debug(ctx.verboseLogging
+      ? `Error checking application version ${versionLabel} existence: ${error}`
+      : `Error checking application version existence: ${error}`);
     return false;
   }
 }
@@ -187,7 +195,8 @@ export async function applicationVersionExists(
 export async function getVersionS3Location(
   clients: AWSClients,
   applicationName: string,
-  versionLabel: string
+  versionLabel: string,
+  ctx: DeploymentContext,
 ): Promise<{ bucket: string; key: string }> {
   try {
     const command = new DescribeApplicationVersionsCommand({
@@ -198,7 +207,9 @@ export async function getVersionS3Location(
     const response = await clients.getElasticBeanstalkClient().send(command);
 
     if (!response.ApplicationVersions || response.ApplicationVersions.length === 0) {
-      throw new Error(`Version ${versionLabel} not found`);
+      throw new Error(ctx.verboseLogging
+        ? `Version ${versionLabel} not found`
+        : 'Application version not found');
     }
 
     const version = response.ApplicationVersions[0];
@@ -206,15 +217,18 @@ export async function getVersionS3Location(
     const key = version.SourceBundle?.S3Key;
 
     if (!bucket || !key) {
-      throw new Error(
-        `Application Version ${versionLabel} has incomplete S3 source bundle information. ` +
-        `Bucket ${bucket ? 'found' : 'missing'}, Key ${key ? 'found' : 'missing'}`
-      );
+      throw new Error(ctx.verboseLogging
+        ? `Application Version ${versionLabel} has incomplete S3 source bundle information. ` +
+          `Bucket ${bucket ? 'found' : 'missing'}, Key ${key ? 'found' : 'missing'}`
+        : `Application version has incomplete S3 source bundle information. ` +
+          `Bucket ${bucket ? 'found' : 'missing'}, Key ${key ? 'found' : 'missing'}`);
     }
 
     return { bucket, key };
   } catch (error) {
-    throw new Error(`Failed to get S3 location for application version ${versionLabel}: ${error}`);
+    throw new Error(ctx.verboseLogging
+      ? `Failed to get S3 location for application version ${versionLabel}: ${error}`
+      : `Failed to get S3 location for application version: ${error}`);
   }
 }
 
@@ -224,7 +238,8 @@ export async function getVersionS3Location(
 export async function environmentExists(
   clients: AWSClients,
   applicationName: string,
-  environmentName: string
+  environmentName: string,
+  ctx: DeploymentContext,
 ): Promise<{ exists: boolean; status?: string; health?: string }> {
   try {
     const command = new DescribeEnvironmentsCommand({
@@ -238,13 +253,21 @@ export async function environmentExists(
       const env = response.Environments[0];
       const status = env.Status;
       const health = env.Health;
-      core.info(`Environment ${environmentName} found - Status: ${status}, Health: ${health}`);
+      logInfo(
+        ctx,
+        `Environment ${environmentName} found - Status: ${status}, Health: ${health}`,
+        `Environment found - Status: ${status}, Health: ${health}`
+      );
 
       const exists = status !== 'Terminated';
       return { exists, status, health };
     }
 
-    core.info(`No environments found with name ${environmentName}`);
+    logInfo(
+      ctx,
+      `No environments found with name ${environmentName}`,
+      'No environments found with the specified name'
+    );
     return { exists: false };
   } catch (error) {
     const err = error as Error & { name?: string; $metadata?: { httpStatusCode?: number } };
@@ -268,10 +291,9 @@ export async function uploadToS3(
   applicationName: string,
   versionLabel: string,
   packagePath: string,
-  maxRetries: number,
-  retryDelay: number,
   createBucketIfNotExists: boolean,
-  customBucketName?: string
+  ctx: DeploymentContext,
+  customBucketName?: string,
 ): Promise<{ bucket: string; key: string }> {
   const bucket = customBucketName || `elasticbeanstalk-${region}-${accountId}`;
   const packageExtension = path.extname(packagePath);
@@ -291,7 +313,7 @@ export async function uploadToS3(
   }
 
   if (createBucketIfNotExists) {
-    await createS3Bucket(clients, region, bucket, accountId, maxRetries, retryDelay);
+    await createS3Bucket(clients, region, bucket, accountId, ctx);
   } else {
     // Verify bucket exists and is owned by this account before uploading.
     // ExpectedBucketOwner causes a 403 if owned by a different account,
@@ -316,9 +338,8 @@ export async function uploadToS3(
 
       await clients.getS3Client().send(command);
     },
-    maxRetries,
-    retryDelay,
-    'Upload to S3'
+    'Upload to S3',
+    ctx,
   );
 
   core.info('✅ Upload complete');
@@ -333,8 +354,7 @@ export async function createS3Bucket(
   region: string,
   bucket: string,
   accountId: string,
-  maxRetries: number,
-  retryDelay: number
+  ctx: DeploymentContext,
 ): Promise<void> {
   try {
     core.info('🪣 Checking if S3 bucket exists');
@@ -351,9 +371,11 @@ export async function createS3Bucket(
     const err = error as Error & { $metadata?: { httpStatusCode?: number } };
 
     if (err.$metadata?.httpStatusCode === 403) {
+      const detail = ctx.verboseLogging
+        ? `S3 bucket '${bucket}' exists but is not owned by this AWS account (${accountId}).`
+        : 'S3 bucket exists but is not owned by this AWS account.';
       throw new Error(
-        `S3 bucket '${bucket}' exists but is not owned by this AWS account (${accountId}). ` +
-        'Specify a different bucket name using the s3-bucket-name input.'
+        `${detail} Specify a different bucket name using the s3-bucket-name input.`
       );
     }
 
@@ -372,9 +394,8 @@ export async function createS3Bucket(
 
         await clients.getS3Client().send(new CreateBucketCommand(createParams));
       },
-      maxRetries,
-      retryDelay,
-      'Create S3 bucket'
+      'Create S3 bucket',
+      ctx,
     );
 
     core.info('✅ S3 bucket created');
@@ -390,11 +411,10 @@ export async function createApplicationVersion(
   versionLabel: string,
   s3Bucket: string,
   s3Key: string,
-  maxRetries: number,
-  retryDelay: number,
-  autoCreateApplication: boolean
+  autoCreateApplication: boolean,
+  ctx: DeploymentContext,
 ): Promise<void> {
-  core.info(`📝 Creating application version: ${versionLabel}`);
+  logInfo(ctx, `📝 Creating application version: ${versionLabel}`, '📝 Creating application version');
 
   await retryWithBackoff(
     async () => {
@@ -411,12 +431,11 @@ export async function createApplicationVersion(
 
       await clients.getElasticBeanstalkClient().send(command);
     },
-    maxRetries,
-    retryDelay,
-    'Create application version'
+    'Create application version',
+    ctx,
   );
 
-  core.info(`✅ Application version ${versionLabel} created`);
+  logInfo(ctx, `✅ Application version ${versionLabel} created`, '✅ Application version created');
 }
 
 /**
@@ -430,10 +449,9 @@ export async function updateEnvironment(
   optionSettings: string | undefined,
   solutionStackName: string | undefined,
   platformArn: string | undefined,
-  maxRetries: number,
-  retryDelay: number
+  ctx: DeploymentContext,
 ): Promise<void> {
-  core.info(`🔄 Updating environment: ${environmentName}`);
+  logInfo(ctx, `🔄 Updating environment: ${environmentName}`, '🔄 Updating environment');
 
   let parsedOptionSettings: Array<{
     Namespace?: string;
@@ -471,12 +489,11 @@ export async function updateEnvironment(
 
       await clients.getElasticBeanstalkClient().send(command);
     },
-    maxRetries,
-    retryDelay,
-    'Update environment'
+    'Update environment',
+    ctx,
   );
 
-  core.info(`✅ Environment update initiated for ${environmentName}`);
+  logInfo(ctx, `✅ Environment update initiated for ${environmentName}`, '✅ Environment update initiated');
 }
 
 /**
@@ -491,10 +508,9 @@ export async function createEnvironment(
   solutionStackName: string | undefined,
   platformArn: string | undefined,
   cnamePrefix: string | undefined,
-  maxRetries: number,
-  retryDelay: number
+  ctx: DeploymentContext,
 ): Promise<void> {
-  core.info(`🆕 Creating new environment: ${environmentName}`);
+  logInfo(ctx, `🆕 Creating new environment: ${environmentName}`, '🆕 Creating new environment');
 
   const optionSettings = parseJsonInput(optionSettingsJson, 'option-settings');
 
@@ -517,12 +533,11 @@ export async function createEnvironment(
 
       await clients.getElasticBeanstalkClient().send(command);
     },
-    maxRetries,
-    retryDelay,
-    'Create environment'
+    'Create environment',
+    ctx,
   );
 
-  core.info(`✅ Environment creation initiated for ${environmentName}`);
+  logInfo(ctx, `✅ Environment creation initiated for ${environmentName}`, '✅ Environment creation initiated');
 }
 
 /**
@@ -531,7 +546,8 @@ export async function createEnvironment(
 export async function getEnvironmentInfo(
   clients: AWSClients,
   applicationName: string,
-  environmentName: string
+  environmentName: string,
+  ctx: DeploymentContext,
 ): Promise<{ url: string; id: string; status: string; health: string }> {
   const command = new DescribeEnvironmentsCommand({
     ApplicationName: applicationName,
@@ -541,7 +557,9 @@ export async function getEnvironmentInfo(
   const response = await clients.getElasticBeanstalkClient().send(command);
 
   if (!response.Environments || response.Environments.length === 0) {
-    throw new Error(`Environment ${environmentName} not found after deployment`);
+    throw new Error(ctx.verboseLogging
+      ? `Environment ${environmentName} not found after deployment`
+      : 'Environment not found after deployment');
   }
 
   const env = response.Environments[0];

@@ -105,10 +105,14 @@ import {
 } from '../aws-operations';
 import { waitForDeploymentCompletion, waitForHealthRecovery } from '../monitoring';
 import { AWSClients } from '../aws-clients';
+import { DeploymentContext } from '../logging';
 
 const mockedCore = core as jest.Mocked<typeof core>;
 const mockedExec = exec as jest.Mocked<typeof exec>;
 const mockedFs = fs as jest.Mocked<typeof fs>;
+
+// Default context for tests
+const defaultCtx: DeploymentContext = { verboseLogging: true, maxRetries: 3, retryDelay: 1 };
 
 describe('Main Functions', () => {
   let mockClients: AWSClients;
@@ -152,6 +156,7 @@ describe('Main Functions', () => {
     });
     mockedCore.getBooleanInput.mockImplementation((name: string) => {
       if (name === 'create-s3-bucket-if-not-exists') return true;
+      if (name === 'verbose-logging') return true;
       return false;
     });
   });
@@ -173,16 +178,16 @@ describe('Main Functions', () => {
       const result = await createDeploymentPackage(undefined, 'v1.0.0', '*.git*,*.node*');
 
       expect(result.path).toBe('deploy-v1.0.0.zip');
-      
+
       const archiver = require('archiver');
       expect(archiver).toHaveBeenCalledWith('zip');
-      
+
       // Verify the mock archive methods were called
       const mockArchiveInstance = archiver();
       expect(mockArchiveInstance.pipe).toHaveBeenCalled();
-      expect(mockArchiveInstance.glob).toHaveBeenCalledWith('**/*', { 
+      expect(mockArchiveInstance.glob).toHaveBeenCalledWith('**/*', {
         dot: true,
-        ignore: ['*.git*', '*.node*'] 
+        ignore: ['*.git*', '*.node*']
       });
       expect(mockArchiveInstance.finalize).toHaveBeenCalled();
     });
@@ -249,7 +254,7 @@ describe('Main Functions', () => {
   describe('retryWithBackoff', () => {
     it('should succeed on first attempt', async () => {
       const mockFn = jest.fn().mockResolvedValue('success');
-      const result = await retryWithBackoff(mockFn, 3, 1, 'Test');
+      const result = await retryWithBackoff(mockFn, 'Test', defaultCtx);
       expect(result).toBe('success');
       expect(mockFn).toHaveBeenCalledTimes(1);
     });
@@ -258,14 +263,15 @@ describe('Main Functions', () => {
       const mockFn = jest.fn()
         .mockRejectedValueOnce(new Error('fail'))
         .mockResolvedValue('success');
-      const result = await retryWithBackoff(mockFn, 3, 1, 'Test');
+      const result = await retryWithBackoff(mockFn, 'Test', defaultCtx);
       expect(result).toBe('success');
       expect(mockFn).toHaveBeenCalledTimes(2);
     });
 
     it('should fail after max retries', async () => {
       const mockFn = jest.fn().mockRejectedValue(new Error('fail'));
-      await expect(retryWithBackoff(mockFn, 2, 1, 'Test'))
+      const ctx: DeploymentContext = { verboseLogging: true, maxRetries: 2, retryDelay: 1 };
+      await expect(retryWithBackoff(mockFn, 'Test', ctx))
         .rejects.toThrow('Test failed after 3 attempts (2 retries): fail');
       expect(mockFn).toHaveBeenCalledTimes(3);
     });
@@ -274,7 +280,7 @@ describe('Main Functions', () => {
       const errorMessage = "You do not have permission to perform the 'ec2:DescribeImages' action.";
       const mockFn = jest.fn().mockRejectedValue(new Error(errorMessage));
 
-      await expect(retryWithBackoff(mockFn, 3, 1, 'Create environment'))
+      await expect(retryWithBackoff(mockFn, 'Create environment', defaultCtx))
         .rejects.toThrow(errorMessage);
 
       // Ensure we only attempted once (no retries)
@@ -285,7 +291,7 @@ describe('Main Functions', () => {
   describe('getAwsAccountId', () => {
     it('should return account ID', async () => {
       mockSend.mockResolvedValue({ Account: '123456789012' });
-      const result = await getAwsAccountId(mockClients, 3, 1);
+      const result = await getAwsAccountId(mockClients, defaultCtx);
       expect(result).toBe('123456789012');
     });
   });
@@ -295,7 +301,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({
         Environments: [{ Status: 'Ready', Health: 'Green' }],
       });
-      const result = await environmentExists(mockClients, 'app', 'env');
+      const result = await environmentExists(mockClients, 'app', 'env', defaultCtx);
       expect(result).toEqual({
         exists: true,
         status: 'Ready',
@@ -305,7 +311,7 @@ describe('Main Functions', () => {
 
     it('should return false if environment does not exist', async () => {
       mockSend.mockResolvedValue({ Environments: [] });
-      const result = await environmentExists(mockClients, 'app', 'env');
+      const result = await environmentExists(mockClients, 'app', 'env', defaultCtx);
       expect(result).toEqual({ exists: false });
     });
 
@@ -313,13 +319,13 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({
         Environments: [{ Status: 'Terminated', Health: 'Grey' }],
       });
-      const result = await environmentExists(mockClients, 'app', 'env');
+      const result = await environmentExists(mockClients, 'app', 'env', defaultCtx);
       expect(result).toEqual({ exists: false, status: 'Terminated', health: 'Grey' });
     });
 
     it('should rethrow unexpected API errors', async () => {
       mockSend.mockRejectedValue(new Error('API Error'));
-      await expect(environmentExists(mockClients, 'app', 'env')).rejects.toThrow('API Error');
+      await expect(environmentExists(mockClients, 'app', 'env', defaultCtx)).rejects.toThrow('API Error');
     });
 
     it('should return false on 404 not found', async () => {
@@ -327,7 +333,7 @@ describe('Main Functions', () => {
         name: 'NoSuchEntityException',
       });
       mockSend.mockRejectedValue(notFoundError);
-      const result = await environmentExists(mockClients, 'app', 'env');
+      const result = await environmentExists(mockClients, 'app', 'env', defaultCtx);
       expect(result).toEqual({ exists: false });
     });
   });
@@ -336,18 +342,18 @@ describe('Main Functions', () => {
   describe('updateEnvironment', () => {
     it('should update environment without options', async () => {
       mockSend.mockResolvedValue({});
-      await updateEnvironment(mockClients, 'app', 'env', 'v1.0.0', '', '64bit Amazon Linux 2', undefined, 3, 1);
+      await updateEnvironment(mockClients, 'app', 'env', 'v1.0.0', '', '64bit Amazon Linux 2', undefined, defaultCtx);
       expect(mockSend).toHaveBeenCalled();
     });
 
     it('should update environment with options', async () => {
       mockSend.mockResolvedValue({});
-      await updateEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[{"Namespace":"test","OptionName":"test","Value":"test"}]', '64bit Amazon Linux 2', undefined, 3, 1);
+      await updateEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[{"Namespace":"test","OptionName":"test","Value":"test"}]', '64bit Amazon Linux 2', undefined, defaultCtx);
       expect(mockSend).toHaveBeenCalled();
     });
 
     it('should handle invalid JSON options', async () => {
-      await expect(updateEnvironment(mockClients, 'app', 'env', 'v1.0.0', 'invalid-json', '64bit Amazon Linux 2', undefined, 3, 1))
+      await expect(updateEnvironment(mockClients, 'app', 'env', 'v1.0.0', 'invalid-json', '64bit Amazon Linux 2', undefined, defaultCtx))
         .rejects.toThrow('Failed to parse option-settings');
     });
   });
@@ -355,20 +361,20 @@ describe('Main Functions', () => {
   describe('createEnvironment', () => {
     it('should create environment', async () => {
       mockSend.mockResolvedValue({});
-      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[{"Namespace":"aws:autoscaling:launchconfiguration","OptionName":"IamInstanceProfile","Value":"profile"}]', 'stack', undefined, undefined, 3, 1);
+      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[{"Namespace":"aws:autoscaling:launchconfiguration","OptionName":"IamInstanceProfile","Value":"profile"}]', 'stack', undefined, undefined, defaultCtx);
       expect(mockSend).toHaveBeenCalledTimes(1); // 1 create
     });
 
     it('should create environment with custom options', async () => {
       mockSend.mockResolvedValue({});
-      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[{"Namespace":"test","OptionName":"test","Value":"test"}]', 'stack', undefined, undefined, 3, 1);
+      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[{"Namespace":"test","OptionName":"test","Value":"test"}]', 'stack', undefined, undefined, defaultCtx);
       expect(mockSend).toHaveBeenCalledTimes(1);
     });
 
     it('should pass cnamePrefix to CreateEnvironmentCommand', async () => {
       const { CreateEnvironmentCommand } = require('@aws-sdk/client-elastic-beanstalk');
       mockSend.mockResolvedValue({});
-      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[]', 'stack', undefined, 'my-cname', 3, 1);
+      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[]', 'stack', undefined, 'my-cname', defaultCtx);
       expect(CreateEnvironmentCommand).toHaveBeenCalledWith(
         expect.objectContaining({ CNAMEPrefix: 'my-cname' })
       );
@@ -377,7 +383,7 @@ describe('Main Functions', () => {
     it('should not include CNAMEPrefix when cnamePrefix is undefined', async () => {
       const { CreateEnvironmentCommand } = require('@aws-sdk/client-elastic-beanstalk');
       mockSend.mockResolvedValue({});
-      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[]', 'stack', undefined, undefined, 3, 1);
+      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[]', 'stack', undefined, undefined, defaultCtx);
       expect(CreateEnvironmentCommand).toHaveBeenCalledWith(
         expect.not.objectContaining({ CNAMEPrefix: expect.anything() })
       );
@@ -386,7 +392,7 @@ describe('Main Functions', () => {
     it('should use PlatformArn only when SolutionStackName is not set', async () => {
       const { CreateEnvironmentCommand } = require('@aws-sdk/client-elastic-beanstalk');
       mockSend.mockResolvedValue({});
-      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[]', undefined, 'arn:aws:elasticbeanstalk:us-east-1::platform/Node.js/1.0', undefined, 3, 1);
+      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[]', undefined, 'arn:aws:elasticbeanstalk:us-east-1::platform/Node.js/1.0', undefined, defaultCtx);
       expect(CreateEnvironmentCommand).toHaveBeenCalledWith(
         expect.objectContaining({ PlatformArn: 'arn:aws:elasticbeanstalk:us-east-1::platform/Node.js/1.0' })
       );
@@ -398,7 +404,7 @@ describe('Main Functions', () => {
     it('should prefer SolutionStackName over PlatformArn when both are set', async () => {
       const { CreateEnvironmentCommand } = require('@aws-sdk/client-elastic-beanstalk');
       mockSend.mockResolvedValue({});
-      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[]', 'stack-name', 'arn:platform', undefined, 3, 1);
+      await createEnvironment(mockClients, 'app', 'env', 'v1.0.0', '[]', 'stack-name', 'arn:platform', undefined, defaultCtx);
       expect(CreateEnvironmentCommand).toHaveBeenCalledWith(
         expect.objectContaining({ SolutionStackName: 'stack-name' })
       );
@@ -413,7 +419,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({
         Environments: [{ Status: 'Ready' }],
       });
-      await waitForDeploymentCompletion(mockClients, 'app', 'env', 900);
+      await waitForDeploymentCompletion(mockClients, 'app', 'env', 900, defaultCtx);
       expect(mockSend).toHaveBeenCalled();
     });
   });
@@ -423,7 +429,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({
         Environments: [{ Health: 'Green', Status: 'Ready' }],
       });
-      await waitForHealthRecovery(mockClients, 'app', 'env', 900);
+      await waitForHealthRecovery(mockClients, 'app', 'env', 900, defaultCtx);
       expect(mockSend).toHaveBeenCalled();
     });
 
@@ -431,7 +437,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({
         Environments: [{ Health: 'Yellow', Status: 'Ready' }],
       });
-      await waitForHealthRecovery(mockClients, 'app', 'env', 900);
+      await waitForHealthRecovery(mockClients, 'app', 'env', 900, defaultCtx);
       expect(mockSend).toHaveBeenCalled();
     });
 
@@ -449,7 +455,7 @@ describe('Main Functions', () => {
             }
           ]
         });
-      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1))
+      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1, defaultCtx))
         .rejects.toThrow('Environment health recovery failed - health is Red');
     });
 
@@ -463,7 +469,7 @@ describe('Main Functions', () => {
           Environments: [{ Health: 'Red', Status: 'Updating' }],
         });
       });
-      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1))
+      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1, defaultCtx))
         .rejects.toThrow('Environment health recovery timed out after 1s');
     });
   });
@@ -478,7 +484,7 @@ describe('Main Functions', () => {
           Health: 'Green',
         }],
       });
-      const result = await getEnvironmentInfo(mockClients, 'app', 'env');
+      const result = await getEnvironmentInfo(mockClients, 'app', 'env', defaultCtx);
       expect(result).toEqual({
         url: 'test.com',
         id: 'e-123',
@@ -489,8 +495,21 @@ describe('Main Functions', () => {
 
     it('should throw error if no environment found', async () => {
       mockSend.mockResolvedValue({ Environments: [] });
-      await expect(getEnvironmentInfo(mockClients, 'app', 'env'))
+      await expect(getEnvironmentInfo(mockClients, 'app', 'env', defaultCtx))
         .rejects.toThrow('Environment env not found after deployment');
+    });
+
+    it('should suppress environment name in error when verbose-logging is false', async () => {
+      mockSend.mockResolvedValue({ Environments: [] });
+      const quietCtx: DeploymentContext = { verboseLogging: false, maxRetries: 3, retryDelay: 1 };
+      try {
+        await getEnvironmentInfo(mockClients, 'app', 'env', quietCtx);
+        fail('Expected error to be thrown');
+      } catch (error) {
+        const message = (error as Error).message;
+        expect(message).not.toContain('env');
+        expect(message).toContain('Environment not found after deployment');
+      }
     });
   });
 
@@ -542,6 +561,7 @@ describe('Main Functions', () => {
       mockedCore.getBooleanInput.mockImplementation((name: string) => {
         if (name === 'create-s3-bucket-if-not-exists') return true;
         if (name === 'create-environment-if-not-exists') return true;
+        if (name === 'verbose-logging') return true;
         return false;
       });
 
@@ -572,6 +592,7 @@ describe('Main Functions', () => {
       mockedCore.getBooleanInput.mockImplementation((name: string) => {
         if (name === 'create-s3-bucket-if-not-exists') return true;
         if (name === 'use-existing-application-version-if-available') return true;
+        if (name === 'verbose-logging') return true;
         return false;
       });
 
@@ -614,6 +635,7 @@ describe('Main Functions', () => {
       mockedCore.getBooleanInput.mockImplementation((name: string) => {
         if (name === 'create-s3-bucket-if-not-exists') return true;
         if (name === 'create-environment-if-not-exists') return true;
+        if (name === 'verbose-logging') return true;
         return false;
       });
 
@@ -663,6 +685,154 @@ describe('Main Functions', () => {
       expect(mockedCore.setFailed).toHaveBeenCalledWith(
         'Deployment failed: Either solution-stack-name or platform-arn must be provided when creating a new environment',
       );
+    });
+
+    it('should suppress sensitive outputs when verbose-logging is false', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'verbose-logging') return false;
+        return false;
+      });
+
+      mockSend.mockImplementation(() => {
+        const callCount = mockSend.mock.calls.length + 1;
+
+        if (callCount === 1) return Promise.resolve({ Account: '123456789012' }); // GetCallerIdentity
+        if (callCount === 2) return Promise.resolve({ ApplicationVersions: [] }); // DescribeApplicationVersions
+        if (callCount === 3) return Promise.resolve({});  // HeadBucket
+        if (callCount === 4) return Promise.resolve({});  // PutObject
+        if (callCount === 5) return Promise.resolve({});  // CreateAppVersion
+        if (callCount === 6) return Promise.resolve({ Environments: [{ Status: 'Ready', Health: 'Green' }] }); // DescribeEnvironment
+        if (callCount === 7) return Promise.resolve({});  // UpdateEnvironment
+        if (callCount === 8) return Promise.resolve({ Environments: [{ CNAME: 'test-env.elasticbeanstalk.com', EnvironmentId: 'e-123', Status: 'Ready', Health: 'Green' }] }); // GetEnvironmentInfo
+
+        return Promise.resolve({});
+      });
+
+      await run();
+
+      // Non-sensitive outputs should always be set
+      expect(mockedCore.setOutput).toHaveBeenCalledWith('environment-status', 'Ready');
+      expect(mockedCore.setOutput).toHaveBeenCalledWith('environment-health', 'Green');
+      expect(mockedCore.setOutput).toHaveBeenCalledWith('deployment-action-type', 'update');
+
+      // Sensitive outputs should NOT be set when verbose-logging is false
+      expect(mockedCore.setOutput).not.toHaveBeenCalledWith('environment-url', expect.anything());
+      expect(mockedCore.setOutput).not.toHaveBeenCalledWith('environment-id', expect.anything());
+      expect(mockedCore.setOutput).not.toHaveBeenCalledWith('version-label', expect.anything());
+    });
+
+    it('should suppress sensitive log details when verbose-logging is false', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'verbose-logging') return false;
+        return false;
+      });
+
+      mockSend.mockImplementation(() => {
+        const callCount = mockSend.mock.calls.length + 1;
+
+        if (callCount === 1) return Promise.resolve({ Account: '123456789012' }); // GetCallerIdentity
+        if (callCount === 2) return Promise.resolve({ ApplicationVersions: [] }); // DescribeApplicationVersions
+        if (callCount === 3) return Promise.resolve({});  // HeadBucket
+        if (callCount === 4) return Promise.resolve({});  // PutObject
+        if (callCount === 5) return Promise.resolve({});  // CreateAppVersion
+        if (callCount === 6) return Promise.resolve({ Environments: [{ Status: 'Ready', Health: 'Green' }] }); // DescribeEnvironment
+        if (callCount === 7) return Promise.resolve({});  // UpdateEnvironment
+        if (callCount === 8) return Promise.resolve({ Environments: [{ CNAME: 'test-env.elasticbeanstalk.com', EnvironmentId: 'e-123', Status: 'Ready', Health: 'Green' }] }); // GetEnvironmentInfo
+
+        return Promise.resolve({});
+      });
+
+      await run();
+
+      const infoCalls = mockedCore.info.mock.calls.map(c => c[0]);
+
+      // Application name, environment name, version label, and region should NOT appear
+      expect(infoCalls).not.toContainEqual('Application: test-app');
+      expect(infoCalls).not.toContainEqual('Environment: test-env');
+      expect(infoCalls).not.toContainEqual('Version: v1.0.0');
+      expect(infoCalls).not.toContainEqual('Region: us-east-1');
+
+      // Deployment Outputs should NOT contain sensitive details
+      expect(infoCalls).not.toContainEqual(expect.stringContaining('Environment URL:'));
+      expect(infoCalls).not.toContainEqual(expect.stringContaining('Environment ID:'));
+      expect(infoCalls).not.toContainEqual(expect.stringContaining('Application Version Label:'));
+
+      // Environment name should NOT appear in environment status/update messages
+      expect(infoCalls).not.toContainEqual(expect.stringContaining('test-env'));
+
+      // Deployment package filename should NOT contain version label
+      expect(infoCalls).not.toContainEqual(expect.stringContaining('deploy-v1.0.0.zip'));
+
+      // startGroup for version creation should NOT contain version label
+      const startGroupCalls = mockedCore.startGroup.mock.calls.map(c => c[0]);
+      const versionGroupCall = startGroupCalls.find(c => c.includes('Creating application version'));
+      expect(versionGroupCall).not.toContain('v1.0.0');
+
+      // Generic operational messages SHOULD still appear
+      expect(infoCalls).toContainEqual('📦 Creating deployment package');
+      expect(infoCalls).toContainEqual(expect.stringContaining('Environment found - Status:'));
+      expect(infoCalls).toContainEqual('🔄 Updating environment');
+      expect(infoCalls).toContainEqual('✅ Environment update initiated');
+    });
+
+    it('should suppress error details when verbose-logging is false and deployment fails', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'verbose-logging') return false;
+        return false;
+      });
+
+      // Force an error early - STS call fails
+      mockSend.mockRejectedValue(new Error('AWS Error'));
+
+      await run();
+
+      // Error details should NOT appear in setFailed
+      expect(mockedCore.setFailed).toHaveBeenCalledWith('Deployment failed (enable verbose-logging for details)');
+
+      // Error details should be in debug log instead
+      expect(mockedCore.debug).toHaveBeenCalledWith(expect.stringContaining('Deployment error detail:'));
+
+      // core.error should NOT contain the error message detail
+      const errorCalls = mockedCore.error.mock.calls.map(c => c[0]);
+      expect(errorCalls).not.toContainEqual(expect.stringContaining('AWS Error'));
+    });
+
+    it('should suppress env name in error when env not exists and verbose-logging is false', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'verbose-logging') return false;
+        return false;
+      });
+
+      mockSend.mockImplementation(() => {
+        const callCount = mockSend.mock.calls.length + 1;
+
+        if (callCount === 1) return Promise.resolve({ Account: '123456789012' }); // GetCallerIdentity
+        if (callCount === 2) return Promise.resolve({ ApplicationVersions: [] }); // DescribeApplicationVersions
+        if (callCount === 3) return Promise.resolve({}); // HeadBucket
+        if (callCount === 4) return Promise.resolve({}); // PutObject
+        if (callCount === 5) return Promise.resolve({}); // CreateAppVersion
+        if (callCount === 6) return Promise.resolve({ Environments: [] }); // No env found
+
+        return Promise.resolve({});
+      });
+
+      await run();
+
+      // setFailed should NOT contain the environment name
+      expect(mockedCore.setFailed).toHaveBeenCalledWith('Deployment failed (enable verbose-logging for details)');
+
+      // The error detail (with env name) should be in debug only
+      expect(mockedCore.debug).toHaveBeenCalledWith(
+        expect.stringContaining('Environment does not exist and create-environment-if-not-exists is false')
+      );
+      // And that debug message should NOT contain the actual env name
+      const debugCalls = mockedCore.debug.mock.calls.map(c => c[0]);
+      const envErrorDebug = debugCalls.find(c => typeof c === 'string' && c.includes('does not exist'));
+      expect(envErrorDebug).not.toContain('test-env');
     });
   });
 

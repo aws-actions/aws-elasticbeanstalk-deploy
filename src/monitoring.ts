@@ -4,6 +4,7 @@ import {
   DescribeEventsCommand,
 } from '@aws-sdk/client-elastic-beanstalk';
 import { AWSClients } from './aws-clients';
+import { DeploymentContext } from './logging';
 
 /**
  * Fetch recent environment events for debugging and check for fatal/error events
@@ -12,8 +13,9 @@ async function describeRecentEvents(
   clients: AWSClients,
   applicationName: string,
   environmentName: string,
+  ctx: DeploymentContext,
   lastSeenEventDate?: Date,
-  deploymentStartTime?: Date
+  deploymentStartTime?: Date,
 ): Promise<{ hasError: boolean; errorMessage?: string; lastEventDate?: Date }> {
   try {
     const command = new DescribeEventsCommand({
@@ -44,20 +46,20 @@ async function describeRecentEvents(
 
       if (newEvents.length > 0) {
         // Only show header on first call
-        if (!lastSeenEventDate) {
+        if (ctx.verboseLogging && !lastSeenEventDate) {
           core.info('📋 Recent events:');
         }
-        
+
         // Sort events by timestamp in ascending order (oldest first)
         const sortedEvents = [...newEvents].sort((a, b) => {
           const dateA = a.EventDate?.getTime() || 0;
           const dateB = b.EventDate?.getTime() || 0;
           return dateA - dateB;
         });
-        
+
         const fatalOrErrorEvents: Array<{ message: string }> = [];
         let mostRecentDate: Date | undefined;
-        
+
         sortedEvents.forEach((event) => {
           const eventDate = event.EventDate;
           if (eventDate) {
@@ -66,18 +68,24 @@ async function describeRecentEvents(
               mostRecentDate = eventDate;
             }
           }
-          
-          const timestamp = eventDate?.toISOString() || 'Unknown time';
+
           const severity = event.Severity || 'INFO';
           const message = event.Message || 'No message';
 
           if (severity === 'ERROR' || severity === 'FATAL') {
-            core.error(`  [${timestamp}] ${severity}: ${message}`);
             fatalOrErrorEvents.push({ message });
-          } else if (severity === 'WARN') {
-            core.warning(`  [${timestamp}] ${severity}: ${message}`);
-          } else {
-            core.info(`  [${timestamp}] ${severity}: ${message}`);
+          }
+
+          // Only log event details when verbose logging is enabled
+          if (ctx.verboseLogging) {
+            const timestamp = eventDate?.toISOString() || 'Unknown time';
+            if (severity === 'ERROR' || severity === 'FATAL') {
+              core.error(`  [${timestamp}] ${severity}: ${message}`);
+            } else if (severity === 'WARN') {
+              core.warning(`  [${timestamp}] ${severity}: ${message}`);
+            } else {
+              core.info(`  [${timestamp}] ${severity}: ${message}`);
+            }
           }
         });
 
@@ -85,10 +93,10 @@ async function describeRecentEvents(
           const errorMessage = fatalOrErrorEvents[0].message || 'Unknown error occurred';
           return { hasError: true, errorMessage, lastEventDate: mostRecentDate };
         }
-        
+
         return { hasError: false, lastEventDate: mostRecentDate };
       }
-    }    
+    }
     return { hasError: false, lastEventDate: lastSeenEventDate };
   } catch (error) {
     // If we can't fetch events, just log and continue
@@ -106,8 +114,9 @@ export async function waitForDeploymentCompletion(
   applicationName: string,
   environmentName: string,
   timeout: number,
+  ctx: DeploymentContext,
   deploymentActionType?: 'create' | 'update',
-  deploymentStartTime?: Date
+  deploymentStartTime?: Date,
 ): Promise<Date | undefined> {
   core.info('⏳ Waiting for deployment to complete...');
 
@@ -115,7 +124,7 @@ export async function waitForDeploymentCompletion(
   const maxWait = timeout * 1000;
   let previousStatus: string | undefined;
   let lastSeenEventDate: Date | undefined;
-  
+
   // Poll every 20 seconds for create, 10 seconds for update
   const pollInterval = deploymentActionType === 'create' ? 20000 : 10000;
 
@@ -137,8 +146,9 @@ export async function waitForDeploymentCompletion(
           clients,
           applicationName,
           environmentName,
+          ctx,
           lastSeenEventDate,
-          deploymentStartTime
+          deploymentStartTime,
         );
         core.info('✅ Deployment complete');
         return finalEvents.lastEventDate || lastSeenEventDate;
@@ -149,16 +159,15 @@ export async function waitForDeploymentCompletion(
         clients,
         applicationName,
         environmentName,
+        ctx,
         lastSeenEventDate,
-        deploymentStartTime
+        deploymentStartTime,
       );
 
       lastSeenEventDate = eventCheck.lastEventDate;
 
       if (eventCheck.hasError) {
-        throw new Error(
-          `Environment deployment failed - fatal or error event detected: ${eventCheck.errorMessage}`
-        );
+        throw new Error(`Environment deployment failed - fatal or error event detected: ${eventCheck.errorMessage}`);
       }
 
       // Only log when status changes
@@ -172,7 +181,7 @@ export async function waitForDeploymentCompletion(
   }
 
   // Timeout occurred - fetch events to help diagnose
-  await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+  await describeRecentEvents(clients, applicationName, environmentName, ctx, lastSeenEventDate, deploymentStartTime);
   throw new Error(`Deployment timed out after ${timeout}s`);
 }
 
@@ -184,8 +193,9 @@ export async function waitForHealthRecovery(
   applicationName: string,
   environmentName: string,
   timeout: number,
+  ctx: DeploymentContext,
   deploymentStartTime?: Date,
-  lastEventDateFromDeployment?: Date
+  lastEventDateFromDeployment?: Date,
 ): Promise<void> {
   core.info('🏥 Waiting for environment health to recover...');
 
@@ -218,8 +228,9 @@ export async function waitForHealthRecovery(
           clients,
           applicationName,
           environmentName,
+          ctx,
           lastSeenEventDate,
-          deploymentStartTime
+          deploymentStartTime,
         );
 
         if (eventCheck.lastEventDate) {
@@ -227,9 +238,7 @@ export async function waitForHealthRecovery(
         }
 
         if (eventCheck.hasError) {
-          throw new Error(
-            `Environment health recovery failed - fatal or error event detected: ${eventCheck.errorMessage}`
-          );
+          throw new Error(`Environment health recovery failed - fatal or error event detected: ${eventCheck.errorMessage}`);
         }
 
         if (health === 'Red' && status === 'Ready') {
@@ -247,6 +256,6 @@ export async function waitForHealthRecovery(
   }
 
   // Timeout occurred - fetch events to help diagnose
-  await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+  await describeRecentEvents(clients, applicationName, environmentName, ctx, lastSeenEventDate, deploymentStartTime);
   throw new Error(`Environment health recovery timed out after ${timeout}s`);
 }

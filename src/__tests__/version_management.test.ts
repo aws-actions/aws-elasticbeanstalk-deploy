@@ -1,5 +1,6 @@
 import { applicationVersionExists, getVersionS3Location, createApplicationVersion } from '../aws-operations';
 import { AWSClients } from '../aws-clients';
+import { DeploymentContext } from '../logging';
 
 // Mock dependencies
 jest.mock('@actions/core', () => ({
@@ -23,6 +24,8 @@ jest.mock('@aws-sdk/client-elastic-beanstalk', () => ({
   CreateApplicationCommand: jest.fn(),
 }));
 
+const defaultCtx: DeploymentContext = { verboseLogging: true, maxRetries: 3, retryDelay: 1 };
+
 describe('Version Management', () => {
   let mockClients: AWSClients;
 
@@ -37,7 +40,7 @@ describe('Version Management', () => {
         ApplicationVersions: [{ VersionLabel: 'v1.0.0' }],
       });
 
-      const result = await applicationVersionExists(mockClients, 'my-app', 'v1.0.0');
+      const result = await applicationVersionExists(mockClients, 'my-app', 'v1.0.0', defaultCtx);
 
       expect(result).toBe(true);
     });
@@ -47,7 +50,7 @@ describe('Version Management', () => {
         ApplicationVersions: [],
       });
 
-      const result = await applicationVersionExists(mockClients, 'my-app', 'v2.0.0');
+      const result = await applicationVersionExists(mockClients, 'my-app', 'v2.0.0', defaultCtx);
 
       expect(result).toBe(false);
     });
@@ -55,7 +58,7 @@ describe('Version Management', () => {
     it('should return false on error', async () => {
       mockSend.mockRejectedValue(new Error('API Error'));
 
-      const result = await applicationVersionExists(mockClients, 'my-app', 'v1.0.0');
+      const result = await applicationVersionExists(mockClients, 'my-app', 'v1.0.0', defaultCtx);
 
       expect(result).toBe(false);
     });
@@ -63,9 +66,22 @@ describe('Version Management', () => {
     it('should handle empty response', async () => {
       mockSend.mockResolvedValue({});
 
-      const result = await applicationVersionExists(mockClients, 'my-app', 'v1.0.0');
+      const result = await applicationVersionExists(mockClients, 'my-app', 'v1.0.0', defaultCtx);
 
       expect(result).toBe(false);
+    });
+
+    it('should not include version label in debug log when verbose-logging is false', async () => {
+      const core = require('@actions/core');
+      mockSend.mockRejectedValue(new Error('API Error'));
+
+      const quietCtx: DeploymentContext = { verboseLogging: false, maxRetries: 3, retryDelay: 1 };
+      await applicationVersionExists(mockClients, 'my-app', 'v1.0.0', quietCtx);
+
+      const debugCalls = core.debug.mock.calls.map((c: any[]) => c[0]);
+      const relevantCall = debugCalls.find((c: string) => c.includes('application version'));
+      expect(relevantCall).toBeDefined();
+      expect(relevantCall).not.toContain('v1.0.0');
     });
   });
 
@@ -81,7 +97,7 @@ describe('Version Management', () => {
         }],
       });
 
-      const result = await getVersionS3Location(mockClients, 'my-app', 'v1.0.0');
+      const result = await getVersionS3Location(mockClients, 'my-app', 'v1.0.0', defaultCtx);
 
       expect(result).toEqual({
         bucket: 'my-bucket',
@@ -94,7 +110,7 @@ describe('Version Management', () => {
         ApplicationVersions: [],
       });
 
-      await expect(getVersionS3Location(mockClients, 'my-app', 'v2.0.0'))
+      await expect(getVersionS3Location(mockClients, 'my-app', 'v2.0.0', defaultCtx))
         .rejects.toThrow('Version v2.0.0 not found');
     });
 
@@ -105,7 +121,7 @@ describe('Version Management', () => {
         }],
       });
 
-      await expect(getVersionS3Location(mockClients, 'my-app', 'v1.0.0'))
+      await expect(getVersionS3Location(mockClients, 'my-app', 'v1.0.0', defaultCtx))
         .rejects.toThrow('has incomplete S3 source bundle information');
     });
 
@@ -119,8 +135,24 @@ describe('Version Management', () => {
         }],
       });
 
-      await expect(getVersionS3Location(mockClients, 'my-app', 'v1.0.0'))
+      await expect(getVersionS3Location(mockClients, 'my-app', 'v1.0.0', defaultCtx))
         .rejects.toThrow('has incomplete S3 source bundle information');
+    });
+
+    it('should not include version label in errors when verbose-logging is false', async () => {
+      mockSend.mockResolvedValue({
+        ApplicationVersions: [],
+      });
+
+      const quietCtx: DeploymentContext = { verboseLogging: false, maxRetries: 3, retryDelay: 1 };
+      try {
+        await getVersionS3Location(mockClients, 'my-app', 'v1.0.0', quietCtx);
+        fail('Expected error to be thrown');
+      } catch (error) {
+        const message = (error as Error).message;
+        expect(message).not.toContain('v1.0.0');
+        expect(message).toContain('Application version not found');
+      }
     });
   });
 
@@ -134,9 +166,8 @@ describe('Version Management', () => {
         'v1.0.0',
         'my-bucket',
         'my-app/v1.0.0.zip',
-        3,
-        1,
-        false
+        false,
+        defaultCtx,
       );
 
       expect(mockSend).toHaveBeenCalled();
@@ -153,9 +184,8 @@ describe('Version Management', () => {
         'v1.0.0',
         'my-bucket',
         'new-app/v1.0.0.zip',
-        3,
-        1,
-        true
+        true,
+        defaultCtx,
       );
 
       expect(mockSend).toHaveBeenCalledTimes(2);
@@ -164,18 +194,41 @@ describe('Version Management', () => {
     it('should handle version creation with different S3 paths', async () => {
       mockSend.mockResolvedValue({});
 
+      const euroCtx: DeploymentContext = { verboseLogging: true, maxRetries: 2, retryDelay: 5 };
       await createApplicationVersion(
         mockClients,
         'euro-app',
         'abc123',
         'elasticbeanstalk-eu-west-1-123456',
         'euro-app/abc123.jar',
-        2,
-        5,
-        false
+        false,
+        euroCtx,
       );
 
       expect(mockSend).toHaveBeenCalled();
+    });
+
+    it('should not log version label when verboseLogging is false', async () => {
+      const core = require('@actions/core');
+      mockSend.mockResolvedValue({});
+
+      const quietCtx: DeploymentContext = { verboseLogging: false, maxRetries: 3, retryDelay: 1 };
+      await createApplicationVersion(
+        mockClients,
+        'my-app',
+        'v1.0.0',
+        'my-bucket',
+        'my-app/v1.0.0.zip',
+        false,
+        quietCtx,
+      );
+
+      const infoCalls = core.info.mock.calls.map((c: any[]) => c[0]);
+      // Should log generic messages without version label
+      expect(infoCalls).toContainEqual('📝 Creating application version');
+      expect(infoCalls).toContainEqual('✅ Application version created');
+      // Should NOT contain version label in any info call
+      expect(infoCalls).not.toContainEqual(expect.stringContaining('v1.0.0'));
     });
 
     it('should fail fast when application version already exists', async () => {
@@ -191,9 +244,8 @@ describe('Version Management', () => {
           'v1.0.0',
           'my-bucket',
           'my-app/v1.0.0.zip',
-          3,
-          1,
-          false
+          false,
+          defaultCtx,
         )
       ).rejects.toThrow('Application Version v1.0.0 already exists.');
 

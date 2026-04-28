@@ -23,6 +23,7 @@ export interface Inputs {
   sourceDirectory?: string;
   excludePatterns: string;
   optionSettings?: string;
+  verboseLogging: boolean;
 }
 
 function validateRequiredInputs() {
@@ -41,7 +42,12 @@ function validateRequiredInputs() {
   // Validate AWS region format (e.g., us-east-1, eu-west-2, us-gov-east-1)
   const regionPattern = /^(us(-gov)?|af|ap|ca|eu|il|me|sa)-(north|south|east|west|central|northeast|southeast|northwest|southwest)-\d$/;
   if (!regionPattern.test(awsRegion)) {
-    core.setFailed(`Invalid AWS region format: ${awsRegion}. Expected format like 'us-east-1' or 'us-gov-east-1'`);
+    // Read verbose-logging early so the error can omit the region value when quiet
+    let verbose = true;
+    try { verbose = core.getBooleanInput('verbose-logging'); } catch { /* default true */ }
+    core.setFailed(verbose
+      ? `Invalid AWS region format: ${awsRegion}. Expected format like 'us-east-1' or 'us-gov-east-1'`
+      : "Invalid AWS region format. Expected format like 'us-east-1' or 'us-gov-east-1'");
     return { valid: false };
   }
 
@@ -158,6 +164,7 @@ function validateOptionalInputs() {
   const waitForEnvironmentRecovery = core.getBooleanInput('wait-for-environment-recovery');
   const useExistingApplicationVersionIfAvailable = core.getBooleanInput('use-existing-application-version-if-available');
   const createS3BucketIfNotExists = core.getBooleanInput('create-s3-bucket-if-not-exists');
+  const verboseLogging = core.getBooleanInput('verbose-logging');
 
   return {
     valid: true,
@@ -173,7 +180,8 @@ function validateOptionalInputs() {
     s3BucketName,
     cnamePrefix,
     excludePatterns,
-    optionSettings
+    optionSettings,
+    verboseLogging
   };
 }
 
@@ -264,7 +272,8 @@ export function validateAllInputs(): { valid: boolean } & Partial<Inputs> {
     createS3BucketIfNotExists: optionalInputs.createS3BucketIfNotExists!,
     s3BucketName: optionalInputs.s3BucketName,
     excludePatterns: optionalInputs.excludePatterns!,
-    optionSettings: optionalInputs.optionSettings
+    optionSettings: optionalInputs.optionSettings,
+    verboseLogging: optionalInputs.verboseLogging!
   };
 
   checkInputConflicts(validatedInputs);

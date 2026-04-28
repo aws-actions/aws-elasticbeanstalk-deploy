@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import archiver from 'archiver';
 import ignore, { Ignore } from 'ignore';
+import { DeploymentContext, logInfo } from './logging';
 
 /**
  * Loads ignore patterns from .ebignore or .gitignore (EB CLI behavior).
@@ -82,30 +83,45 @@ export async function createDeploymentPackage(
   packagePath: string | undefined,
   versionLabel: string,
   excludePatternsInput: string,
-  sourceDirectory?: string
+  sourceDirectory?: string,
+  ctx?: DeploymentContext,
 ): Promise<{ path: string }> {
   if (packagePath) {
     if (!fs.existsSync(packagePath)) {
       throw new Error(
-        `deployment-package-path '${packagePath}' does not exist. ` +
-        'Either provide a valid file path or omit deployment-package-path to have the action create a package automatically.'
+        (ctx?.verboseLogging ?? true)
+          ? `deployment-package-path '${packagePath}' does not exist. ` +
+            'Either provide a valid file path or omit deployment-package-path to have the action create a package automatically.'
+          : 'deployment-package-path does not exist. ' +
+            'Either provide a valid file path or omit deployment-package-path to have the action create a package automatically.'
       );
     }
 
     const stats = fs.statSync(packagePath);
     if (!stats.isFile()) {
       throw new Error(
-        `deployment-package-path '${packagePath}' is not a file. ` +
-        'It must point to an existing deployment archive file (e.g., .zip, .war).'
+        (ctx?.verboseLogging ?? true)
+          ? `deployment-package-path '${packagePath}' is not a file. ` +
+            'It must point to an existing deployment archive file (e.g., .zip, .war).'
+          : 'deployment-package-path is not a file. ' +
+            'It must point to an existing deployment archive file (e.g., .zip, .war).'
       );
     }
 
-    core.info(`📦 Using existing deployment package: ${packagePath}`);
+    if (ctx) {
+      logInfo(ctx, `📦 Using existing deployment package: ${packagePath}`, '📦 Using existing deployment package');
+    } else {
+      core.info(`📦 Using existing deployment package: ${packagePath}`);
+    }
     return { path: packagePath };
   }
 
   const zipFileName = `deploy-${versionLabel}.zip`;
-  core.info(`📦 Creating deployment package: ${zipFileName}`);
+  if (ctx) {
+    logInfo(ctx, `📦 Creating deployment package: ${zipFileName}`, '📦 Creating deployment package');
+  } else {
+    core.info(`📦 Creating deployment package: ${zipFileName}`);
+  }
 
   const excludePatterns = excludePatternsInput
     .split(',')

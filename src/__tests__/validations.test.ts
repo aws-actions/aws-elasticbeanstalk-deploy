@@ -87,11 +87,29 @@ describe('Validation Functions', () => {
         ]);
         return '';
       });
+      mockedCore.getBooleanInput.mockReturnValue(true);
 
       const result = validateAllInputs();
 
       expect(result.valid).toBe(false);
       expect(mockedCore.setFailed).toHaveBeenCalledWith('Invalid AWS region format: invalid-region. Expected format like \'us-east-1\' or \'us-gov-east-1\'');
+    });
+
+    it('should suppress region in error when verbose-logging is false', () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        if (name === 'aws-region') return 'invalid-region';
+        if (name === 'application-name') return 'test-app';
+        if (name === 'environment-name') return 'test-env';
+        return '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(false);
+      const failedMessage = mockedCore.setFailed.mock.calls[0][0] as string;
+      expect(failedMessage).not.toContain('invalid-region');
+      expect(failedMessage).toContain("Expected format like 'us-east-1' or 'us-gov-east-1'");
     });
 
     it('should validate successfully for GovCloud regions', () => {

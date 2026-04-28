@@ -62,8 +62,11 @@ jest.mock('@aws-sdk/client-sts', () => ({
 import * as fs from 'fs';
 import { uploadToS3, createS3Bucket } from '../aws-operations';
 import { AWSClients } from '../aws-clients';
+import { DeploymentContext } from '../logging';
 
 const mockedFs = fs as jest.Mocked<typeof fs>;
+
+const defaultCtx: DeploymentContext = { verboseLogging: true, maxRetries: 3, retryDelay: 1 };
 
 describe('S3 Operations', () => {
   let mockClients: AWSClients;
@@ -80,7 +83,7 @@ describe('S3 Operations', () => {
         .mockResolvedValueOnce({}) // HeadBucket (ownership check)
         .mockResolvedValueOnce({}); // PutObject
 
-      const result = await uploadToS3(mockClients, 'us-east-1', '123456789012', 'my-app', 'v1.0.0', 'app.zip', 3, 1, false);
+      const result = await uploadToS3(mockClients, 'us-east-1', '123456789012', 'my-app', 'v1.0.0', 'app.zip', false, defaultCtx);
 
       expect(result).toEqual({
         bucket: 'elasticbeanstalk-us-east-1-123456789012',
@@ -95,7 +98,7 @@ describe('S3 Operations', () => {
         .mockResolvedValueOnce({}) // HeadBucket (ownership check)
         .mockResolvedValueOnce({}); // PutObject
 
-      const result = await uploadToS3(mockClients, 'us-west-2', '987654321098', 'app', 'abc123', 'deploy.jar', 3, 1, false);
+      const result = await uploadToS3(mockClients, 'us-west-2', '987654321098', 'app', 'abc123', 'deploy.jar', false, defaultCtx);
 
       expect(result).toEqual({
         bucket: 'elasticbeanstalk-us-west-2-987654321098',
@@ -109,7 +112,7 @@ describe('S3 Operations', () => {
         .mockResolvedValueOnce({}) // HeadBucket (ownership check)
         .mockResolvedValueOnce({}); // PutObject
 
-      const result = await uploadToS3(mockClients, 'eu-west-1', '111222333444', 'test-app', 'v2.0.0', 'package.zip', 3, 1, false);
+      const result = await uploadToS3(mockClients, 'eu-west-1', '111222333444', 'test-app', 'v2.0.0', 'package.zip', false, defaultCtx);
 
       expect(result.bucket).toBe('elasticbeanstalk-eu-west-1-111222333444');
     });
@@ -119,7 +122,7 @@ describe('S3 Operations', () => {
     it('should not create bucket if it already exists', async () => {
       mockSend.mockResolvedValueOnce({}); // HeadBucket with ExpectedBucketOwner succeeds
 
-      await createS3Bucket(mockClients, 'us-east-1', 'existing-bucket', '123456789012', 3, 1);
+      await createS3Bucket(mockClients, 'us-east-1', 'existing-bucket', '123456789012', defaultCtx);
 
       expect(mockSend).toHaveBeenCalledTimes(1); // HeadBucket only (ownership verified via ExpectedBucketOwner)
     });
@@ -129,7 +132,7 @@ describe('S3 Operations', () => {
         .mockRejectedValueOnce(new Error('NoSuchBucket')) // HeadBucket throws (bucket doesn't exist)
         .mockResolvedValueOnce({}); // CreateBucket succeeds
 
-      await createS3Bucket(mockClients, 'us-east-1', 'new-bucket', '123456789012', 3, 1);
+      await createS3Bucket(mockClients, 'us-east-1', 'new-bucket', '123456789012', defaultCtx);
 
       expect(mockSend).toHaveBeenCalledTimes(2); // HeadBucket + CreateBucket
     });
@@ -139,7 +142,7 @@ describe('S3 Operations', () => {
         .mockRejectedValueOnce(new Error('NoSuchBucket')) // HeadBucket throws (bucket doesn't exist)
         .mockResolvedValueOnce({}); // CreateBucket with LocationConstraint succeeds
 
-      await createS3Bucket(mockClients, 'eu-central-1', 'euro-bucket', '123456789012', 3, 1);
+      await createS3Bucket(mockClients, 'eu-central-1', 'euro-bucket', '123456789012', defaultCtx);
 
       expect(mockSend).toHaveBeenCalledTimes(2); // HeadBucket + CreateBucket
     });
@@ -150,7 +153,7 @@ describe('S3 Operations', () => {
         .mockRejectedValueOnce(new Error('NetworkError')) // CreateBucket attempt 1 fails
         .mockResolvedValueOnce({}); // CreateBucket attempt 2 succeeds
 
-      await createS3Bucket(mockClients, 'us-west-2', 'retry-bucket', '123456789012', 3, 1);
+      await createS3Bucket(mockClients, 'us-west-2', 'retry-bucket', '123456789012', defaultCtx);
 
       expect(mockSend).toHaveBeenCalledTimes(3); // HeadBucket + 2 CreateBucket attempts
     });
@@ -161,10 +164,31 @@ describe('S3 Operations', () => {
 
       mockSend.mockRejectedValueOnce(forbiddenError); // HeadBucket returns 403
 
-      await expect(createS3Bucket(mockClients, 'us-east-1', 'someone-elses-bucket', '123456789012', 3, 1))
+      await expect(createS3Bucket(mockClients, 'us-east-1', 'someone-elses-bucket', '123456789012', defaultCtx))
         .rejects.toThrow("S3 bucket 'someone-elses-bucket' exists but is not owned by this AWS account");
 
       expect(mockSend).toHaveBeenCalledTimes(1); // HeadBucket only, no create attempt
+    });
+
+    it('should redact bucket name and account ID in 403 error when verbose-logging is false', async () => {
+      const forbiddenError = new Error('Forbidden');
+      (forbiddenError as any).$metadata = { httpStatusCode: 403 };
+
+      mockSend.mockRejectedValueOnce(forbiddenError); // HeadBucket returns 403
+
+      const quietCtx: DeploymentContext = { verboseLogging: false, maxRetries: 3, retryDelay: 1 };
+      try {
+        await createS3Bucket(mockClients, 'us-east-1', 'someone-elses-bucket', '123456789012', quietCtx);
+        fail('Expected error to be thrown');
+      } catch (error) {
+        const message = (error as Error).message;
+        // Should NOT contain bucket name or account ID
+        expect(message).not.toContain('someone-elses-bucket');
+        expect(message).not.toContain('123456789012');
+        // Should still contain actionable guidance
+        expect(message).toContain('S3 bucket exists but is not owned by this AWS account');
+        expect(message).toContain('s3-bucket-name');
+      }
     });
 
     it('should bubble up AccessDenied permissions error without retrying', async () => {
@@ -175,7 +199,7 @@ describe('S3 Operations', () => {
         .mockRejectedValueOnce(new Error('NoSuchBucket')) // HeadBucketCommand throws error (bucket doesn't exist)
         .mockRejectedValueOnce(accessDeniedError); // First CreateBucketCommand fails with AccessDenied
 
-      await expect(createS3Bucket(mockClients, 'us-east-1', 'permission-denied-bucket', '123456789012', 3, 1))
+      await expect(createS3Bucket(mockClients, 'us-east-1', 'permission-denied-bucket', '123456789012', defaultCtx))
         .rejects.toThrow('Access Denied');
 
       expect(mockSend).toHaveBeenCalledTimes(2); // 1 HeadBucket + 1 CreateBucket (no retries on AccessDenied)
@@ -191,7 +215,8 @@ describe('S3 Operations', () => {
         .mockRejectedValueOnce(bucketExistsError) // CreateBucketCommand attempt 2 fails (retry 1)
         .mockRejectedValueOnce(bucketExistsError); // CreateBucketCommand attempt 3 fails (retry 2)
 
-      await expect(createS3Bucket(mockClients, 'eu-west-1', 'taken-bucket-name', '123456789012', 2, 1))
+      const ctx2Retries: DeploymentContext = { verboseLogging: true, maxRetries: 2, retryDelay: 1 };
+      await expect(createS3Bucket(mockClients, 'eu-west-1', 'taken-bucket-name', '123456789012', ctx2Retries))
         .rejects.toThrow('Create S3 bucket failed after 3 attempts (2 retries): The requested bucket name is not available');
 
       expect(mockSend).toHaveBeenCalledTimes(4); // 1 HeadBucket + 3 CreateBucket attempts
@@ -206,7 +231,8 @@ describe('S3 Operations', () => {
         .mockRejectedValueOnce(invalidNameError) // CreateBucketCommand attempt 1 fails
         .mockRejectedValueOnce(invalidNameError); // CreateBucketCommand attempt 2 fails (retry 1)
 
-      await expect(createS3Bucket(mockClients, 'us-west-2', 'Invalid_Bucket_Name', '123456789012', 1, 1))
+      const ctx1Retry: DeploymentContext = { verboseLogging: true, maxRetries: 1, retryDelay: 1 };
+      await expect(createS3Bucket(mockClients, 'us-west-2', 'Invalid_Bucket_Name', '123456789012', ctx1Retry))
         .rejects.toThrow('Create S3 bucket failed after 2 attempts (1 retry): The specified bucket is not valid');
 
       expect(mockSend).toHaveBeenCalledTimes(3); // 1 HeadBucket + 2 CreateBucket attempts
@@ -223,7 +249,8 @@ describe('S3 Operations', () => {
         .mockResolvedValueOnce({}) // HeadBucket (ownership check)
         .mockRejectedValueOnce(uploadError); // PutObject fails with non-retryable AccessDenied
 
-      await expect(uploadToS3(mockClients, 'us-east-1', '123456789012', 'my-app', 'v1.0.0', 'app.zip', 2, 1, false))
+      const ctx2Retries: DeploymentContext = { verboseLogging: true, maxRetries: 2, retryDelay: 1 };
+      await expect(uploadToS3(mockClients, 'us-east-1', '123456789012', 'my-app', 'v1.0.0', 'app.zip', false, ctx2Retries))
         .rejects.toThrow('Access Denied');
 
       expect(mockSend).toHaveBeenCalledTimes(2); // 1 HeadBucket + 1 PutObject
@@ -241,7 +268,7 @@ describe('S3 Operations', () => {
         .mockRejectedValueOnce(noSuchBucketError) // PutObject attempt 3 fails (retry 2)
         .mockRejectedValueOnce(noSuchBucketError); // PutObject attempt 4 fails (retry 3)
 
-      await expect(uploadToS3(mockClients, 'eu-central-1', '987654321098', 'test-app', 'v2.0.0', 'deploy.jar', 3, 1, false))
+      await expect(uploadToS3(mockClients, 'eu-central-1', '987654321098', 'test-app', 'v2.0.0', 'deploy.jar', false, defaultCtx))
         .rejects.toThrow('Upload to S3 failed after 4 attempts (3 retries): The specified bucket does not exist');
 
       expect(mockSend).toHaveBeenCalledTimes(5); // 1 HeadBucket + 4 PutObject attempts
@@ -253,7 +280,7 @@ describe('S3 Operations', () => {
       const oversizedPackage = 600 * 1024 * 1024; // 600 MB
       mockedFs.statSync.mockReturnValue({ size: oversizedPackage } as any);
 
-      await expect(uploadToS3(mockClients, 'us-east-1', '123456789012', 'my-app', 'v1.0.0', 'large-app.zip', 3, 1, false))
+      await expect(uploadToS3(mockClients, 'us-east-1', '123456789012', 'my-app', 'v1.0.0', 'large-app.zip', false, defaultCtx))
         .rejects.toThrow('exceeds the maximum allowed size of 500 MB');
 
       // Should fail before any AWS API calls
@@ -267,7 +294,7 @@ describe('S3 Operations', () => {
         .mockResolvedValueOnce({}) // HeadBucket (ownership check)
         .mockResolvedValueOnce({}); // PutObject
 
-      const result = await uploadToS3(mockClients, 'us-west-2', '123456789012', 'my-app', 'v2.0.0', 'valid-app.zip', 3, 1, false);
+      const result = await uploadToS3(mockClients, 'us-west-2', '123456789012', 'my-app', 'v2.0.0', 'valid-app.zip', false, defaultCtx);
 
       expect(result).toEqual({
         bucket: 'elasticbeanstalk-us-west-2-123456789012',
@@ -283,7 +310,7 @@ describe('S3 Operations', () => {
         .mockResolvedValueOnce({}) // HeadBucket (ownership check)
         .mockResolvedValueOnce({}); // PutObject
 
-      const result = await uploadToS3(mockClients, 'eu-west-1', '987654321098', 'test-app', 'v1.0.0', 'exact-app.zip', 3, 1, false);
+      const result = await uploadToS3(mockClients, 'eu-west-1', '987654321098', 'test-app', 'v1.0.0', 'exact-app.zip', false, defaultCtx);
 
       expect(result).toEqual({
         bucket: 'elasticbeanstalk-eu-west-1-987654321098',
@@ -296,7 +323,7 @@ describe('S3 Operations', () => {
       const justOverLimit = (500 * 1024 * 1024) + 1; // 500 MB + 1 byte
       mockedFs.statSync.mockReturnValue({ size: justOverLimit } as any);
 
-      await expect(uploadToS3(mockClients, 'ap-southeast-1', '111222333444', 'app', 'v3.0.0', 'over-limit.zip', 3, 1, false))
+      await expect(uploadToS3(mockClients, 'ap-southeast-1', '111222333444', 'app', 'v3.0.0', 'over-limit.zip', false, defaultCtx))
         .rejects.toThrow('exceeds the maximum allowed size of 500 MB');
 
       expect(mockSend).not.toHaveBeenCalled();

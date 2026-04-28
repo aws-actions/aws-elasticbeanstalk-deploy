@@ -75,6 +75,10 @@ inputs:
   option-settings:
     description: 'Elastic Beanstalk option settings as JSON array. Required when creating a new environment - MUST include IAM settings: [{"Namespace":"aws:autoscaling:launchconfiguration","OptionName":"IamInstanceProfile","Value":"your-instance-profile"},{"Namespace":"aws:elasticbeanstalk:environment","OptionName":"ServiceRole","Value":"your-service-role"}]'
     required: false
+  verbose-logging:
+    description: 'Enable verbose logging of sensitive deployment details (region, account ID, environment ID, version label, environment URL). When false, operational progress is still logged but identifying infrastructure details are suppressed from logs and outputs.'
+    required: false
+    default: 'true'
 
 outputs:
   environment-url:
