@@ -52,12 +52,16 @@ describe('Version Management', () => {
       expect(result).toBe(false);
     });
 
-    it('should return false on error', async () => {
+    it('should return false on error and log a warning', async () => {
+      const core = require('@actions/core');
       mockSend.mockRejectedValue(new Error('API Error'));
 
       const result = await applicationVersionExists(mockClients, 'my-app', 'v1.0.0');
 
       expect(result).toBe(false);
+      expect(core.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to check if application version v1.0.0 exists')
+      );
     });
 
     it('should handle empty response', async () => {

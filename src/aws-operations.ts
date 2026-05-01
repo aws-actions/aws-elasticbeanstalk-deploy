@@ -176,7 +176,10 @@ export async function applicationVersionExists(
     const response = await clients.getElasticBeanstalkClient().send(command);
     return (response.ApplicationVersions?.length ?? 0) > 0;
   } catch (error) {
-    core.debug(`Error checking application version ${versionLabel} existence: ${error}`);
+    core.warning(
+      `Failed to check if application version ${versionLabel} exists: ${(error as Error).message}. ` +
+      'Assuming version does not exist.'
+    );
     return false;
   }
 }

@@ -84,16 +84,33 @@ export async function run(): Promise<void> {
       core.endGroup();
 
       core.startGroup(`📝 Creating application version ${applicationVersionLabel}`);
-      await createApplicationVersion(
-        clients,
-        applicationName,
-        applicationVersionLabel,
-        bucket,
-        key,
-        maxRetries,
-        retryDelay,
-        createApplicationIfNotExists
-      );
+      try {
+        await createApplicationVersion(
+          clients,
+          applicationName,
+          applicationVersionLabel,
+          bucket,
+          key,
+          maxRetries,
+          retryDelay,
+          createApplicationIfNotExists
+        );
+      } catch (createError) {
+        const message = (createError as Error).message || '';
+        const isAlreadyExists = /application version .* already exists/i.test(message);
+
+        if (isAlreadyExists && useExistingApplicationVersionIfAvailable) {
+          core.warning(
+            `Application version ${applicationVersionLabel} already exists. ` +
+            'Falling back to existing version (use-existing-application-version-if-available is true).'
+          );
+          const s3Location = await getVersionS3Location(clients, applicationName, applicationVersionLabel);
+          bucket = s3Location.bucket;
+          key = s3Location.key;
+        } else {
+          throw createError;
+        }
+      }
       core.endGroup();
     } else {
       core.startGroup('♻️  Reusing existing version');
