@@ -641,15 +641,17 @@ describe('Main Functions', () => {
       const alreadyExistsError = new Error('Application Version v1.0.0 already exists.');
       (alreadyExistsError as any).name = 'InvalidParameterValueException';
 
+      // When useExistingApplicationVersionIfAvailable is false, applicationVersionExists
+      // is never called (short-circuit evaluation), so the call sequence skips DescribeApplicationVersions
       mockSend.mockImplementation(() => {
         const callCount = mockSend.mock.calls.length;
 
         if (callCount === 1) return Promise.resolve({ Account: '123456789012' }); // GetCallerIdentity
-        if (callCount === 2) return Promise.resolve({ ApplicationVersions: [] }); // DescribeApplicationVersions
-        if (callCount === 3) return Promise.resolve({});  // HeadBucket
-        if (callCount === 4) return Promise.resolve({});  // PutObject
+        // No DescribeApplicationVersions call - short-circuited by !useExistingApplicationVersionIfAvailable
+        if (callCount === 2) return Promise.resolve({});  // HeadBucket
+        if (callCount === 3) return Promise.resolve({});  // PutObject
         // CreateApplicationVersion - fails with already exists
-        if (callCount === 5) return Promise.reject(alreadyExistsError);
+        if (callCount === 4) return Promise.reject(alreadyExistsError);
 
         return Promise.resolve({});
       });
@@ -658,6 +660,9 @@ describe('Main Functions', () => {
 
       expect(mockedCore.setFailed).toHaveBeenCalledWith(
         expect.stringContaining('Application Version v1.0.0 already exists.')
+      );
+      expect(mockedCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('use-existing-application-version-if-available is false')
       );
     });
 

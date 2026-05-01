@@ -107,6 +107,13 @@ export async function run(): Promise<void> {
           const s3Location = await getVersionS3Location(clients, applicationName, applicationVersionLabel);
           bucket = s3Location.bucket;
           key = s3Location.key;
+        } else if (isAlreadyExists) {
+          core.warning(
+            `Application version ${applicationVersionLabel} already exists, but use-existing-application-version-if-available is false. ` +
+            'If this is unexpected, verify your IAM role has the elasticbeanstalk:DescribeApplicationVersions permission. ' +
+            'Alternatively, set use-existing-application-version-if-available to true to reuse existing versions.'
+          );
+          throw createError;
         } else {
           throw createError;
         }
