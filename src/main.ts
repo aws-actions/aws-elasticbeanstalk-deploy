@@ -20,8 +20,8 @@ import { waitForDeploymentCompletion, waitForHealthRecovery } from './monitoring
 export async function run(): Promise<void> {
   const startTime = Date.now();
   // Hoist verboseLogging so it is accessible in the catch block for error gating.
-  // Defaults to true (verbose) if validation fails before inputs are parsed.
-  let verboseLogging = true;
+  // Defaults to false (quiet) if validation fails before inputs are parsed.
+  let verboseLogging = false;
 
   try {
     core.info('🚀 Starting Elastic Beanstalk deployment...');

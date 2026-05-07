@@ -43,8 +43,8 @@ function validateRequiredInputs() {
   const regionPattern = /^(us(-gov)?|af|ap|ca|eu|il|me|sa)-(north|south|east|west|central|northeast|southeast|northwest|southwest)-\d$/;
   if (!regionPattern.test(awsRegion)) {
     // Read verbose-logging early so the error can omit the region value when quiet
-    let verbose = true;
-    try { verbose = core.getBooleanInput('verbose-logging'); } catch { /* default true */ }
+    let verbose = false;
+    try { verbose = core.getBooleanInput('verbose-logging'); } catch { /* default false */ }
     core.setFailed(verbose
       ? `Invalid AWS region format: ${awsRegion}. Expected format like 'us-east-1' or 'us-gov-east-1'`
       : "Invalid AWS region format. Expected format like 'us-east-1' or 'us-gov-east-1'");
