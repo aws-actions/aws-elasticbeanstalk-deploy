@@ -5,6 +5,7 @@ import { createDeploymentPackage } from './deploymentpackage';
 import {
   getAwsAccountId,
   applicationVersionExists,
+  isApplicationVersionAlreadyExistsError,
   uploadToS3,
   createApplicationVersion,
   environmentExists,
@@ -91,8 +92,7 @@ export async function run(): Promise<void> {
           createApplicationIfNotExists
         );
       } catch (createError) {
-        const message = (createError as Error).message || '';
-        const isAlreadyExists = /application version .* already exists/i.test(message);
+        const isAlreadyExists = isApplicationVersionAlreadyExistsError(createError);
 
         if (isAlreadyExists && useExistingApplicationVersionIfAvailable) {
           core.warning(

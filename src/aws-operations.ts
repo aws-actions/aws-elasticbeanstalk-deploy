@@ -89,6 +89,19 @@ export const AWS_S3_REGIONS = [
 export type AWSS3Region = typeof AWS_S3_REGIONS[number];
 
 /**
+ * Check if an error indicates an application version already exists.
+ * Used to short-circuit retries and to handle race conditions gracefully.
+ */
+export function isApplicationVersionAlreadyExistsError(error: unknown): boolean {
+  const err = error as Error & { name?: string };
+  const message = err.message || '';
+  return (
+    /application version .* already exists/i.test(message) ||
+    (err.name === 'InvalidParameterValueException' && /already exists/i.test(message))
+  );
+}
+
+/**
  * Retry a function with exponential backoff
  */
 export async function retryWithBackoff<T>(
@@ -115,11 +128,7 @@ export async function retryWithBackoff<T>(
         err.name === 'UnauthorizedOperation';
 
       // non-retryable EB application version already-exists errors - fail fast
-      const isAppVersionExistsError =
-        /application version .* already exists/i.test(message) ||
-        (err.name === 'InvalidParameterValueException' && /already exists/i.test(message));
-
-      if (isAuthError || isAppVersionExistsError) {
+      if (isAuthError || isApplicationVersionAlreadyExistsError(err)) {
         throw err;
       }
 
