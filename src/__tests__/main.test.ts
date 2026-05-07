@@ -575,11 +575,10 @@ describe('Main Functions', () => {
         return false;
       });
 
-      // Mock sequence: STS -> applicationVersionExists (true) -> getVersionS3Location -> DescribeEnvs -> UpdateEnv -> GetEnvInfo
-      // No S3 calls since version already exists
+      // Mock sequence: STS -> applicationVersionExists (true) -> DescribeEnvs -> UpdateEnv -> GetEnvInfo
+      // No S3 upload or version creation since version already exists
       mockSend
         .mockResolvedValueOnce({ Account: '123456789012' })
-        .mockResolvedValueOnce({ ApplicationVersions: [{ VersionLabel: 'v1.0.0', SourceBundle: { S3Bucket: 'my-bucket', S3Key: 'my-app/v1.0.0.zip' } }] })
         .mockResolvedValueOnce({ ApplicationVersions: [{ VersionLabel: 'v1.0.0', SourceBundle: { S3Bucket: 'my-bucket', S3Key: 'my-app/v1.0.0.zip' } }] })
         .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green' }] })
         .mockResolvedValueOnce({})
@@ -611,11 +610,10 @@ describe('Main Functions', () => {
         if (callCount === 4) return Promise.resolve({});  // PutObject
         // CreateApplicationVersion - fails with already exists
         if (callCount === 5) return Promise.reject(alreadyExistsError);
-        // getVersionS3Location - fallback to get existing version S3 location
-        if (callCount === 6) return Promise.resolve({ ApplicationVersions: [{ VersionLabel: 'v1.0.0', SourceBundle: { S3Bucket: 'my-bucket', S3Key: 'my-app/v1.0.0.zip' } }] });
-        if (callCount === 7) return Promise.resolve({ Environments: [{ Status: 'Ready', Health: 'Green' }] }); // DescribeEnvironment
-        if (callCount === 8) return Promise.resolve({});  // UpdateEnvironment
-        if (callCount === 9) return Promise.resolve({ Environments: [{ CNAME: 'test.com', EnvironmentId: 'e-123', Status: 'Ready', Health: 'Green' }] }); // GetEnvironmentInfo
+        // No getVersionS3Location call - bucket/key not needed downstream
+        if (callCount === 6) return Promise.resolve({ Environments: [{ Status: 'Ready', Health: 'Green' }] }); // DescribeEnvironment
+        if (callCount === 7) return Promise.resolve({});  // UpdateEnvironment
+        if (callCount === 8) return Promise.resolve({ Environments: [{ CNAME: 'test.com', EnvironmentId: 'e-123', Status: 'Ready', Health: 'Green' }] }); // GetEnvironmentInfo
 
         return Promise.resolve({});
       });

@@ -5,7 +5,6 @@ import { createDeploymentPackage } from './deploymentpackage';
 import {
   getAwsAccountId,
   applicationVersionExists,
-  getVersionS3Location,
   uploadToS3,
   createApplicationVersion,
   environmentExists,
@@ -61,13 +60,11 @@ export async function run(): Promise<void> {
     core.endGroup();
 
     // Check if we should reuse existing application version
-    let bucket: string;
-    let key: string;
     const shouldCreateNewApplicationVersion = !useExistingApplicationVersionIfAvailable || !(await applicationVersionExists(clients, applicationName, applicationVersionLabel));
 
     if (shouldCreateNewApplicationVersion) {
       core.startGroup('☁️  Uploading to S3');
-      const uploadResult = await uploadToS3(
+      const { bucket, key } = await uploadToS3(
         clients,
         awsRegion,
         accountId,
@@ -79,8 +76,6 @@ export async function run(): Promise<void> {
         createS3BucketIfNotExists,
         s3BucketName
       );
-      bucket = uploadResult.bucket;
-      key = uploadResult.key;
       core.endGroup();
 
       core.startGroup(`📝 Creating application version ${applicationVersionLabel}`);
@@ -104,9 +99,6 @@ export async function run(): Promise<void> {
             `Application version ${applicationVersionLabel} already exists. ` +
             'Falling back to existing version (use-existing-application-version-if-available is true).'
           );
-          const s3Location = await getVersionS3Location(clients, applicationName, applicationVersionLabel);
-          bucket = s3Location.bucket;
-          key = s3Location.key;
         } else if (isAlreadyExists) {
           core.warning(
             `Application version ${applicationVersionLabel} already exists, but use-existing-application-version-if-available is false. ` +
@@ -122,9 +114,6 @@ export async function run(): Promise<void> {
     } else {
       core.startGroup('♻️  Reusing existing version');
       core.info(`Version ${applicationVersionLabel} already exists, skipping S3 upload and version creation`);
-      const s3Location = await getVersionS3Location(clients, applicationName, applicationVersionLabel);
-      bucket = s3Location.bucket;
-      key = s3Location.key;
       core.endGroup();
     }
 
