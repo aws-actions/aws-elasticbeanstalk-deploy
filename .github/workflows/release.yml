@@ -87,3 +87,16 @@ jobs:
             dist/index.js.sha256
             action.yml.sha256
           generate_release_notes: true
+
+      - name: Update major version tag
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag ${GITHUB_REF_NAME} is not a stable vX.Y.Z release — skipping major tag update."
+            exit 0
+          fi
+          MAJOR="v$(echo "${GITHUB_REF_NAME#v}" | cut -d. -f1)"
+          echo "Moving ${MAJOR} -> ${GITHUB_SHA} (from tag ${GITHUB_REF_NAME})"
+          git tag -f "${MAJOR}" "${GITHUB_SHA}"
+          git push origin "${MAJOR}" --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
