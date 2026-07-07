@@ -108408,19 +108408,23 @@ function gte(i, y) {
 function expand_(str, max, isTop) {
     /** @type {string[]} */
     const expansions = [];
-    const m = (0, balanced_match_1.balanced)('{', '}', str);
-    if (!m)
-        return [str];
-    // no need to expand pre, since it is guaranteed to be free of brace-sets
-    const pre = m.pre;
-    const post = m.post.length ? expand_(m.post, max, false) : [''];
-    if (/\$$/.test(m.pre)) {
-        for (let k = 0; k < post.length && k < max; k++) {
-            const expansion = pre + '{' + m.body + '}' + post[k];
-            expansions.push(expansion);
+    // The `{a},b}` rewrite below restarts expansion on a rewritten string with
+    // the same `max` and `isTop = true`. Loop instead of recursing so a long run
+    // of non-expanding `{}` groups can't exhaust the call stack.
+    for (;;) {
+        const m = (0, balanced_match_1.balanced)('{', '}', str);
+        if (!m)
+            return [str];
+        // no need to expand pre, since it is guaranteed to be free of brace-sets
+        const pre = m.pre;
+        if (/\$$/.test(m.pre)) {
+            const post = m.post.length ? expand_(m.post, max, false) : [''];
+            for (let k = 0; k < post.length && k < max; k++) {
+                const expansion = pre + '{' + m.body + '}' + post[k];
+                expansions.push(expansion);
+            }
+            return expansions;
         }
-    }
-    else {
         const isNumericSequence = /^-?\d+\.\.-?\d+(?:\.\.-?\d+)?$/.test(m.body);
         const isAlphaSequence = /^[a-zA-Z]\.\.[a-zA-Z](?:\.\.-?\d+)?$/.test(m.body);
         const isSequence = isNumericSequence || isAlphaSequence;
@@ -108429,10 +108433,16 @@ function expand_(str, max, isTop) {
             // {a},b}
             if (m.post.match(/,(?!,).*\}/)) {
                 str = m.pre + '{' + m.body + escClose + m.post;
-                return expand_(str, max, true);
+                isTop = true;
+                continue;
             }
             return [str];
         }
+        // Only expand post once we know this brace set actually expands. Computing
+        // it before the early returns above expanded post a second time on every
+        // non-expanding `{}`, which is what made inputs like `a{},{},{}...` blow up
+        // exponentially.
+        const post = m.post.length ? expand_(m.post, max, false) : [''];
         let n;
         if (isSequence) {
             n = m.body.split(/\.\./);
@@ -108468,7 +108478,7 @@ function expand_(str, max, isTop) {
             }
             const pad = n.some(isPadded);
             N = [];
-            for (let i = x; test(i, y); i += incr) {
+            for (let i = x; test(i, y) && N.length < max; i += incr) {
                 let c;
                 if (isAlphaSequence) {
                     c = String.fromCharCode(i);
@@ -108508,8 +108518,8 @@ function expand_(str, max, isTop) {
                 }
             }
         }
+        return expansions;
     }
-    return expansions;
 }
 //# sourceMappingURL=index.js.map
 
@@ -113473,7 +113483,7 @@ module.exports = /*#__PURE__*/JSON.parse('{"name":"@aws-sdk/client-sts","descrip
 /***/ ((module) => {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"aws-elasticbeanstalk-deploy","version":"0.1.0","description":"Deploy applications to AWS Elastic Beanstalk","repository":{"type":"git","url":"git+https://github.com/aws-actions/aws-elasticbeanstalk-deploy.git"},"homepage":"https://github.com/aws-actions/aws-elasticbeanstalk-deploy","engines":{"node":">=24"},"scripts":{"clean":"rm -rf dist && rm -rf node_modules","build":"ncc build src/main.ts -o dist --source-map --license licenses.txt","watch":"tsc -w","format":"prettier --write \'**/*.ts\'","package":"ncc build src/main.ts -o dist --source-map --license licenses.txt","prepublishOnly":"npm run build && npm run test","test":"jest --collectCoverage --collectCoverageFrom=src/**/*.{ts,js}"},"main":"dist/index.js","exports":"dist/index.js","files":["dist/","action.yml","!**/__tests__/**"],"keywords":["aws","elastic-beanstalk","deployment","github-actions"],"dependencies":{"@actions/core":"^1.10.1","@aws-sdk/client-elastic-beanstalk":"^3.928.0","@aws-sdk/client-s3":"^3.478.0","@aws-sdk/client-sts":"^3.478.0","archiver":"^7.0.1","ignore":"^7.0.5"},"devDependencies":{"@actions/exec":"^1.1.1","@types/archiver":"^6.0.2","@types/jest":"^29.5.12","@types/node":"^24.0.0","@vercel/ncc":"^0.38.1","jest":"^29.7.0","ts-jest":"^29.2.4","typescript":"~5.4.5"},"overrides":{"fast-xml-parser":">=5.3.8","undici":">=6.23.0"}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"aws-elasticbeanstalk-deploy","version":"0.1.0","description":"Deploy applications to AWS Elastic Beanstalk","repository":{"type":"git","url":"git+https://github.com/aws-actions/aws-elasticbeanstalk-deploy.git"},"homepage":"https://github.com/aws-actions/aws-elasticbeanstalk-deploy","engines":{"node":">=24"},"scripts":{"clean":"rm -rf dist && rm -rf node_modules","build":"ncc build src/main.ts -o dist --source-map --license licenses.txt","watch":"tsc -w","format":"prettier --write \'**/*.ts\'","package":"ncc build src/main.ts -o dist --source-map --license licenses.txt","prepublishOnly":"npm run build && npm run test","test":"jest --collectCoverage --collectCoverageFrom=src/**/*.{ts,js}"},"main":"dist/index.js","exports":"dist/index.js","files":["dist/","action.yml","!**/__tests__/**"],"keywords":["aws","elastic-beanstalk","deployment","github-actions"],"dependencies":{"@actions/core":"^1.10.1","@aws-sdk/client-elastic-beanstalk":"^3.928.0","@aws-sdk/client-s3":"^3.478.0","@aws-sdk/client-sts":"^3.478.0","archiver":"^7.0.1","ignore":"^7.0.5"},"devDependencies":{"@actions/exec":"^1.1.1","@types/archiver":"^6.0.2","@types/jest":"^29.5.12","@types/node":"^24.0.0","@vercel/ncc":"^0.38.1","jest":"^29.7.0","ts-jest":"^29.2.4","typescript":"~5.4.5"},"overrides":{"fast-xml-parser":">=5.3.8","undici":">=6.23.0","brace-expansion@^5.0.0":"^5.0.7","js-yaml@^3.0.0":"^3.15.0","@babel/core@^7.0.0":"^7.29.6"}}');
 
 /***/ })
 
