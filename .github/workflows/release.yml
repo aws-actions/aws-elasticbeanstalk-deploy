@@ -3,7 +3,7 @@ name: Release with Artifact Attestation
 on:
   push:
     tags:
-      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+      - 'v*.*.*' # Only vX.Y.Z release tags; excludes floating major tags like v1
 
 permissions:
   contents: write      # Create releases
