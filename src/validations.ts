@@ -22,6 +22,7 @@ export interface Inputs {
   cnamePrefix?: string;
   sourceDirectory?: string;
   excludePatterns: string;
+  symlinks: 'preserve' | 'follow';
   optionSettings?: string;
 }
 
@@ -122,6 +123,12 @@ function validateOptionalInputs() {
   const deploymentPackagePath = core.getInput('deployment-package-path').trim() || undefined;
   const sourceDirectory = core.getInput('source-directory').trim() || undefined;
   const excludePatterns = core.getInput('exclude-patterns').trim() || '';
+  const symlinksInput = (core.getInput('symlinks').trim() || 'preserve').toLowerCase();
+  if (symlinksInput !== 'preserve' && symlinksInput !== 'follow') {
+    core.setFailed(`Invalid symlinks value: '${symlinksInput}'. Expected 'preserve' or 'follow'.`);
+    return { valid: false };
+  }
+  const symlinks = symlinksInput as 'preserve' | 'follow';
   const s3BucketName = core.getInput('s3-bucket-name') || undefined;
   const cnamePrefix = core.getInput('cname-prefix') || undefined;
   const optionSettings = core.getInput('option-settings') || undefined;
@@ -173,6 +180,7 @@ function validateOptionalInputs() {
     s3BucketName,
     cnamePrefix,
     excludePatterns,
+    symlinks,
     optionSettings
   };
 }
@@ -183,6 +191,14 @@ function checkInputConflicts(inputs: Partial<Inputs>): void {
     core.warning(
       'Both deployment-package-path and exclude-patterns are specified. ' +
       'exclude-patterns and .ebignore/.gitignore patterns will be ignored since deployment-package-path takes precedence.'
+    );
+  }
+
+  // Warn if deployment-package-path is provided together with symlinks (non-default)
+  if (inputs.deploymentPackagePath && inputs.symlinks && inputs.symlinks !== 'preserve') {
+    core.warning(
+      'Both deployment-package-path and a non-default symlinks value are specified. ' +
+      'symlinks will be ignored since deployment-package-path takes precedence.'
     );
   }
 
@@ -264,6 +280,7 @@ export function validateAllInputs(): { valid: boolean } & Partial<Inputs> {
     createS3BucketIfNotExists: optionalInputs.createS3BucketIfNotExists!,
     s3BucketName: optionalInputs.s3BucketName,
     excludePatterns: optionalInputs.excludePatterns!,
+    symlinks: optionalInputs.symlinks!,
     optionSettings: optionalInputs.optionSettings
   };
 

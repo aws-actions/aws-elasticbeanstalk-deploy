@@ -33,7 +33,7 @@ export async function run(): Promise<void> {
       createEnvironmentIfNotExists, createApplicationIfNotExists, waitForDeployment,
       waitForEnvironmentRecovery, deploymentTimeout, maxRetries, retryDelay,
       useExistingApplicationVersionIfAvailable, createS3BucketIfNotExists, s3BucketName, cnamePrefix, excludePatterns,
-      optionSettings
+      symlinks, optionSettings
     } = inputs as Inputs;
 
     core.startGroup('📋 Validating inputs');
@@ -56,7 +56,8 @@ export async function run(): Promise<void> {
       deploymentPackagePath,
       applicationVersionLabel,
       excludePatterns,
-      sourceDirectory
+      sourceDirectory,
+      symlinks
     );
     core.endGroup();
 
