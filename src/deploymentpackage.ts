@@ -34,18 +34,12 @@ export function loadIgnorePatterns(cwd: string): { content: string; source: stri
 }
 
 /**
- * Recursively walks a directory, invoking a callback for each non-ignored entry.
- * Normalizes path separators to forward slashes for cross-platform compatibility.
- * Skips ignored directories early to avoid unnecessary I/O.
+ * Recursively walks a directory, emitting non-ignored entries via callback.
  *
- * Symlink handling depends on `symlinks`:
- * - 'preserve' (default): emit a symlink entry that records the link target.
- *   Matches EB CLI behavior. The directory tree is not descended through the
- *   link, so cyclic links can't cause infinite recursion.
- * - 'follow': if the symlink resolves inside the source root, inline the
- *   target's contents (file or directory subtree). Symlinks pointing outside
- *   the root are skipped. An ancestor-directory set prevents cycles without
- *   blocking multiple symlinks that legitimately point to the same file.
+ * Symlink modes:
+ * - 'preserve' (default, matches EB CLI): stores the link as a symlink entry.
+ * - 'follow': inlines target contents for in-tree symlinks; skips external ones.
+ *   An ancestor set breaks directory cycles without blocking duplicate file links.
  */
 export function walkFiles(
   dir: string,
@@ -62,28 +56,16 @@ export function walkFiles(
     return;
   }
 
-  // The ancestor set tracks directories currently on the recursion stack.
-  // This prevents infinite loops from cyclic directory symlinks while still
-  // allowing multiple symlinks to point to the same file or even the same
-  // directory from different branches of the tree.
+  // Tracks directories on the recursion stack to break cyclic symlinks.
   const ancestors = new Set<string>([rootReal]);
   walkTree(dir, '', zipFileName, callback, ig, symlinks, rootReal, ancestors);
 }
 
 /**
- * Internal walker used for both the initial walk and recursion into
- * followed-symlink directory targets.
- *
- * `relBase` is the archive-relative path for `dir` — the path that should
- * prefix every entry emitted from this directory. For the top-level walk
- * `relBase` is empty. For a followed directory-symlink, `relBase` is the
- * link's own location in the source tree, so entries appear under the link's
- * name rather than the real target's path.
- *
- * `ancestors` contains the real paths of all directories on the current
- * recursion stack. It is used exclusively to break directory cycles; file
- * symlinks are never blocked by it, so multiple links to the same file are
- * all included in the archive (each under their own path).
+ * Internal recursive walker. `relBase` is the archive-relative prefix for
+ * entries in `dir` (empty at the top level; the link's path when following a
+ * directory symlink). `ancestors` tracks directories on the current stack to
+ * prevent cycles — file symlinks are never blocked by it.
  */
 function walkTree(
   dir: string,
