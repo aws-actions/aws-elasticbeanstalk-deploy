@@ -259,7 +259,10 @@ export async function createZipFile(
       if (entry.kind === 'file') {
         archive.file(entry.sourcePath, { name: entry.relativePath });
       } else {
-        archive.symlink(entry.relativePath, entry.target);
+        // Without an explicit mode, archiver writes symlink entries with 000
+        // permissions, which breaks extraction on platforms that honor
+        // symlink modes (e.g. macOS).
+        archive.symlink(entry.relativePath, entry.target, 0o755);
       }
     }, hasIgnoreRules ? ig : undefined, symlinks);
 
