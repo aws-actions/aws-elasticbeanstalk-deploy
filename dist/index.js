@@ -103698,52 +103698,13 @@ function loadIgnorePatterns(cwd) {
 }
 exports.loadIgnorePatterns = loadIgnorePatterns;
 /**
- * Recursively walks a directory, invoking a callback for each non-ignored entry.
+ * Recursively walks a directory, invoking a callback for each non-ignored file.
  * Normalizes path separators to forward slashes for cross-platform compatibility.
- * Skips ignored directories early to avoid unnecessary I/O.
- *
- * Symlink handling depends on `symlinks`:
- * - 'preserve' (default): emit a symlink entry that records the link target.
- *   Matches EB CLI behavior. The directory tree is not descended through the
- *   link, so cyclic links can't cause infinite recursion.
- * - 'follow': if the symlink resolves inside the source root, inline the
- *   target's contents (file or directory subtree). Symlinks pointing outside
- *   the root are skipped. An ancestor-directory set prevents cycles without
- *   blocking multiple symlinks that legitimately point to the same file.
+ * Skips ignored directories early to avoid unnecessary I/O, and skips symlinks
+ * to prevent infinite recursion from circular symlinks.
  */
-function walkFiles(dir, zipFileName, callback, ig, symlinks = 'preserve') {
-    let rootReal;
-    try {
-        rootReal = fs.realpathSync(dir);
-    }
-    catch (err) {
-        core.warning(`Skipping unreadable directory: ${dir} (${err.code ?? err.message})`);
-        return;
-    }
-    // The ancestor set tracks directories currently on the recursion stack.
-    // This prevents infinite loops from cyclic directory symlinks while still
-    // allowing multiple symlinks to point to the same file or even the same
-    // directory from different branches of the tree.
-    const ancestors = new Set([rootReal]);
-    walkTree(dir, '', zipFileName, callback, ig, symlinks, rootReal, ancestors);
-}
-exports.walkFiles = walkFiles;
-/**
- * Internal walker used for both the initial walk and recursion into
- * followed-symlink directory targets.
- *
- * `relBase` is the archive-relative path for `dir` — the path that should
- * prefix every entry emitted from this directory. For the top-level walk
- * `relBase` is empty. For a followed directory-symlink, `relBase` is the
- * link's own location in the source tree, so entries appear under the link's
- * name rather than the real target's path.
- *
- * `ancestors` contains the real paths of all directories on the current
- * recursion stack. It is used exclusively to break directory cycles; file
- * symlinks are never blocked by it, so multiple links to the same file are
- * all included in the archive (each under their own path).
- */
-function walkTree(dir, relBase, zipFileName, callback, ig, symlinks, rootReal, ancestors) {
+function walkFiles(dir, zipFileName, callback, ig, baseDir) {
+    const root = baseDir ?? dir;
     let entries;
     try {
         entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -103754,81 +103715,35 @@ function walkTree(dir, relBase, zipFileName, callback, ig, symlinks, rootReal, a
     }
     for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
-        const relativePath = relBase === '' ? entry.name : `${relBase}/${entry.name}`;
-        if (relativePath === zipFileName)
+        // Skip symlinks to prevent infinite recursion from circular symlinks
+        if (entry.isSymbolicLink())
             continue;
-        if (entry.isSymbolicLink()) {
-            if (ig && ig.ignores(relativePath))
-                continue;
-            if (symlinks === 'preserve') {
-                let target;
-                try {
-                    target = fs.readlinkSync(fullPath);
-                }
-                catch (err) {
-                    core.warning(`Skipping unreadable symlink: ${fullPath} (${err.code ?? err.message})`);
-                    continue;
-                }
-                callback({ kind: 'symlink', relativePath, target });
-                continue;
-            }
-            // symlinks === 'follow'
-            let realPath;
-            try {
-                realPath = fs.realpathSync(fullPath);
-            }
-            catch (err) {
-                core.warning(`Skipping broken symlink: ${fullPath} (${err.code ?? err.message})`);
-                continue;
-            }
-            if (realPath !== rootReal && !realPath.startsWith(rootReal + path.sep)) {
-                core.info(`Skipping external symlink: ${relativePath} -> ${realPath}`);
-                continue;
-            }
-            let stats;
-            try {
-                stats = fs.statSync(realPath);
-            }
-            catch (err) {
-                core.warning(`Skipping unreadable symlink target: ${fullPath} (${err.code ?? err.message})`);
-                continue;
-            }
-            if (stats.isDirectory()) {
-                if (ancestors.has(realPath)) {
-                    core.info(`Skipping cyclic directory symlink: ${relativePath} -> ${realPath}`);
-                    continue;
-                }
-                ancestors.add(realPath);
-                walkTree(realPath, relativePath, zipFileName, callback, ig, symlinks, rootReal, ancestors);
-                ancestors.delete(realPath);
-            }
-            else if (stats.isFile()) {
-                callback({ kind: 'file', relativePath, sourcePath: realPath });
-            }
-            continue;
-        }
+        const relativePath = path.relative(root, fullPath).replace(/\\/g, '/');
         if (entry.isDirectory()) {
+            // Skip ignored directories early to avoid unnecessary traversal
             if (ig && ig.ignores(relativePath + '/'))
                 continue;
-            walkTree(fullPath, relativePath, zipFileName, callback, ig, symlinks, rootReal, ancestors);
+            walkFiles(fullPath, zipFileName, callback, ig, root);
         }
-        else if (entry.isFile()) {
+        else {
+            if (relativePath === zipFileName)
+                continue;
+            // Skip ignored files during traversal
             if (ig && ig.ignores(relativePath))
                 continue;
-            callback({ kind: 'file', relativePath, sourcePath: fullPath });
+            callback(relativePath);
         }
     }
 }
+exports.walkFiles = walkFiles;
 /**
  * Creates a deployment package for Elastic Beanstalk
  * @param packagePath - Path to existing package (optional)
  * @param versionLabel - Version label for the deployment
  * @param excludePatternsInput - Comma-separated patterns to exclude
- * @param sourceDirectory - Directory to package (defaults to cwd)
- * @param symlinks - How to handle symlinks: 'preserve' or 'follow'
  * @returns Object containing the path to the deployment package
  */
-async function createDeploymentPackage(packagePath, versionLabel, excludePatternsInput, sourceDirectory, symlinks = 'preserve') {
+async function createDeploymentPackage(packagePath, versionLabel, excludePatternsInput, sourceDirectory) {
     if (packagePath) {
         if (!fs.existsSync(packagePath)) {
             throw new Error(`deployment-package-path '${packagePath}' does not exist. ` +
@@ -103851,17 +103766,16 @@ async function createDeploymentPackage(packagePath, versionLabel, excludePattern
     const effectiveDir = sourceDirectory ?? process.cwd();
     const ignoreFile = loadIgnorePatterns(effectiveDir);
     const ignoreFileContent = ignoreFile ? ignoreFile.content : null;
-    await createZipFile(zipFileName, excludePatterns, ignoreFileContent, effectiveDir, symlinks);
+    await createZipFile(zipFileName, excludePatterns, ignoreFileContent, sourceDirectory);
     return { path: zipFileName };
 }
 exports.createDeploymentPackage = createDeploymentPackage;
 /**
- * Creates a zip file using archiver. Walks the source tree with `walkFiles`
- * and routes each emitted entry to `archive.file()` for regular files or
- * inlined symlink targets, or `archive.symlink()` for preserved symlink
- * entries.
+ * Creates a zip file using archiver.
+ * When ignoreFileContent is provided, walks the file tree and filters with the ignore library.
+ * Otherwise, uses archive.glob() for backward compatibility.
  */
-async function createZipFile(zipFileName, excludePatterns, ignoreFileContent, sourceDirectory, symlinks = 'preserve') {
+async function createZipFile(zipFileName, excludePatterns, ignoreFileContent, sourceDirectory) {
     return new Promise((resolve, reject) => {
         const output = fs.createWriteStream(zipFileName);
         const archive = (0, archiver_1.default)('zip');
@@ -103869,25 +103783,19 @@ async function createZipFile(zipFileName, excludePatterns, ignoreFileContent, so
         output.on('error', reject);
         archive.on('error', reject);
         archive.pipe(output);
-        const ig = (0, ignore_1.default)();
+        const effectiveDir = sourceDirectory ?? process.cwd();
         if (ignoreFileContent) {
-            ig.add(ignoreFileContent);
-        }
-        if (excludePatterns.length > 0) {
-            ig.add(excludePatterns);
-        }
-        const hasIgnoreRules = !!ignoreFileContent || excludePatterns.length > 0;
-        walkFiles(sourceDirectory, zipFileName, (entry) => {
-            if (entry.kind === 'file') {
-                archive.file(entry.sourcePath, { name: entry.relativePath });
+            const ig = (0, ignore_1.default)().add(ignoreFileContent);
+            if (excludePatterns.length > 0) {
+                ig.add(excludePatterns);
             }
-            else {
-                // Without an explicit mode, archiver writes symlink entries with 000
-                // permissions, which breaks extraction on platforms that honor
-                // symlink modes (e.g. macOS).
-                archive.symlink(entry.relativePath, entry.target, 0o755);
-            }
-        }, hasIgnoreRules ? ig : undefined, symlinks);
+            walkFiles(effectiveDir, zipFileName, (relativePath) => {
+                archive.file(path.join(effectiveDir, relativePath), { name: relativePath });
+            }, ig);
+        }
+        else {
+            archive.glob('**/*', { cwd: sourceDirectory, ignore: excludePatterns, dot: true });
+        }
         archive.finalize();
     });
 }
@@ -103940,7 +103848,7 @@ async function run() {
         if (!inputs.valid) {
             return;
         }
-        const { awsRegion, applicationName, environmentName, applicationVersionLabel, deploymentPackagePath, sourceDirectory, solutionStackName, platformArn, createEnvironmentIfNotExists, createApplicationIfNotExists, waitForDeployment, waitForEnvironmentRecovery, deploymentTimeout, maxRetries, retryDelay, useExistingApplicationVersionIfAvailable, createS3BucketIfNotExists, s3BucketName, cnamePrefix, excludePatterns, symlinks, optionSettings } = inputs;
+        const { awsRegion, applicationName, environmentName, applicationVersionLabel, deploymentPackagePath, sourceDirectory, solutionStackName, platformArn, createEnvironmentIfNotExists, createApplicationIfNotExists, waitForDeployment, waitForEnvironmentRecovery, deploymentTimeout, maxRetries, retryDelay, useExistingApplicationVersionIfAvailable, createS3BucketIfNotExists, s3BucketName, cnamePrefix, excludePatterns, optionSettings } = inputs;
         core.startGroup('📋 Validating inputs');
         core.info(`Application: ${applicationName}`);
         core.info(`Environment: ${environmentName}`);
@@ -103954,7 +103862,7 @@ async function run() {
         core.info('✅ AWS account verified');
         core.endGroup();
         core.startGroup('📦 Creating deployment package');
-        const { path: packagePath } = await (0, deploymentpackage_1.createDeploymentPackage)(deploymentPackagePath, applicationVersionLabel, excludePatterns, sourceDirectory, symlinks);
+        const { path: packagePath } = await (0, deploymentpackage_1.createDeploymentPackage)(deploymentPackagePath, applicationVersionLabel, excludePatterns, sourceDirectory);
         core.endGroup();
         // Check if we should reuse existing application version
         let bucket;
@@ -104367,12 +104275,6 @@ function validateOptionalInputs() {
     const deploymentPackagePath = core.getInput('deployment-package-path').trim() || undefined;
     const sourceDirectory = core.getInput('source-directory').trim() || undefined;
     const excludePatterns = core.getInput('exclude-patterns').trim() || '';
-    const symlinksInput = (core.getInput('symlinks').trim() || 'preserve').toLowerCase();
-    if (symlinksInput !== 'preserve' && symlinksInput !== 'follow') {
-        core.setFailed(`Invalid symlinks value: '${symlinksInput}'. Expected 'preserve' or 'follow'.`);
-        return { valid: false };
-    }
-    const symlinks = symlinksInput;
     const s3BucketName = core.getInput('s3-bucket-name') || undefined;
     const cnamePrefix = core.getInput('cname-prefix') || undefined;
     const optionSettings = core.getInput('option-settings') || undefined;
@@ -104421,7 +104323,6 @@ function validateOptionalInputs() {
         s3BucketName,
         cnamePrefix,
         excludePatterns,
-        symlinks,
         optionSettings
     };
 }
@@ -104430,11 +104331,6 @@ function checkInputConflicts(inputs) {
     if (inputs.deploymentPackagePath && inputs.excludePatterns !== '') {
         core.warning('Both deployment-package-path and exclude-patterns are specified. ' +
             'exclude-patterns and .ebignore/.gitignore patterns will be ignored since deployment-package-path takes precedence.');
-    }
-    // Warn if deployment-package-path is provided together with symlinks (non-default)
-    if (inputs.deploymentPackagePath && inputs.symlinks && inputs.symlinks !== 'preserve') {
-        core.warning('Both deployment-package-path and a non-default symlinks value are specified. ' +
-            'symlinks will be ignored since deployment-package-path takes precedence.');
     }
     // Check if deployment-package-path is provided WITH source-directory
     if (inputs.deploymentPackagePath && inputs.sourceDirectory) {
@@ -104496,7 +104392,6 @@ function validateAllInputs() {
         createS3BucketIfNotExists: optionalInputs.createS3BucketIfNotExists,
         s3BucketName: optionalInputs.s3BucketName,
         excludePatterns: optionalInputs.excludePatterns,
-        symlinks: optionalInputs.symlinks,
         optionSettings: optionalInputs.optionSettings
     };
     checkInputConflicts(validatedInputs);
