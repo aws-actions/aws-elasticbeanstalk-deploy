@@ -44,20 +44,57 @@ export function loadIgnorePatterns(cwd: string): { content: string; source: stri
  *   link, so cyclic links can't cause infinite recursion.
  * - 'follow': if the symlink resolves inside the source root, inline the
  *   target's contents (file or directory subtree). Symlinks pointing outside
- *   the root are skipped. A visited-real-path set prevents cycles.
+ *   the root are skipped. An ancestor-directory set prevents cycles without
+ *   blocking multiple symlinks that legitimately point to the same file.
  */
 export function walkFiles(
   dir: string,
   zipFileName: string,
   callback: (entry: WalkEntry) => void,
   ig?: Ignore,
-  symlinks: SymlinkMode = 'preserve',
-  baseDir?: string,
-  visited?: Set<string>
+  symlinks: SymlinkMode = 'preserve'
 ): void {
-  const root = baseDir ?? dir;
-  const seen = visited ?? new Set<string>();
+  let rootReal: string;
+  try {
+    rootReal = fs.realpathSync(dir);
+  } catch (err: any) {
+    core.warning(`Skipping unreadable directory: ${dir} (${err.code ?? err.message})`);
+    return;
+  }
 
+  // The ancestor set tracks directories currently on the recursion stack.
+  // This prevents infinite loops from cyclic directory symlinks while still
+  // allowing multiple symlinks to point to the same file or even the same
+  // directory from different branches of the tree.
+  const ancestors = new Set<string>([rootReal]);
+  walkTree(dir, '', zipFileName, callback, ig, symlinks, rootReal, ancestors);
+}
+
+/**
+ * Internal walker used for both the initial walk and recursion into
+ * followed-symlink directory targets.
+ *
+ * `relBase` is the archive-relative path for `dir` — the path that should
+ * prefix every entry emitted from this directory. For the top-level walk
+ * `relBase` is empty. For a followed directory-symlink, `relBase` is the
+ * link's own location in the source tree, so entries appear under the link's
+ * name rather than the real target's path.
+ *
+ * `ancestors` contains the real paths of all directories on the current
+ * recursion stack. It is used exclusively to break directory cycles; file
+ * symlinks are never blocked by it, so multiple links to the same file are
+ * all included in the archive (each under their own path).
+ */
+function walkTree(
+  dir: string,
+  relBase: string,
+  zipFileName: string,
+  callback: (entry: WalkEntry) => void,
+  ig: Ignore | undefined,
+  symlinks: SymlinkMode,
+  rootReal: string,
+  ancestors: Set<string>
+): void {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -68,10 +105,11 @@ export function walkFiles(
 
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
-    const relativePath = path.relative(root, fullPath).replace(/\\/g, '/');
+    const relativePath = relBase === '' ? entry.name : `${relBase}/${entry.name}`;
+
+    if (relativePath === zipFileName) continue;
 
     if (entry.isSymbolicLink()) {
-      if (relativePath === zipFileName) continue;
       if (ig && ig.ignores(relativePath)) continue;
 
       if (symlinks === 'preserve') {
@@ -95,15 +133,10 @@ export function walkFiles(
         continue;
       }
 
-      const rootReal = fs.realpathSync(root);
-      const rel = path.relative(rootReal, realPath);
-      if (rel.startsWith('..') || path.isAbsolute(rel)) {
+      if (realPath !== rootReal && !realPath.startsWith(rootReal + path.sep)) {
         core.info(`Skipping external symlink: ${relativePath} -> ${realPath}`);
         continue;
       }
-
-      if (seen.has(realPath)) continue;
-      seen.add(realPath);
 
       let stats: fs.Stats;
       try {
@@ -114,7 +147,13 @@ export function walkFiles(
       }
 
       if (stats.isDirectory()) {
-        walkSymlinkedDir(realPath, relativePath, zipFileName, callback, ig, symlinks, root, seen);
+        if (ancestors.has(realPath)) {
+          core.info(`Skipping cyclic directory symlink: ${relativePath} -> ${realPath}`);
+          continue;
+        }
+        ancestors.add(realPath);
+        walkTree(realPath, relativePath, zipFileName, callback, ig, symlinks, rootReal, ancestors);
+        ancestors.delete(realPath);
       } else if (stats.isFile()) {
         callback({ kind: 'file', relativePath, sourcePath: realPath });
       }
@@ -123,72 +162,8 @@ export function walkFiles(
 
     if (entry.isDirectory()) {
       if (ig && ig.ignores(relativePath + '/')) continue;
-      walkFiles(fullPath, zipFileName, callback, ig, symlinks, root, seen);
+      walkTree(fullPath, relativePath, zipFileName, callback, ig, symlinks, rootReal, ancestors);
     } else if (entry.isFile()) {
-      if (relativePath === zipFileName) continue;
-      if (ig && ig.ignores(relativePath)) continue;
-      callback({ kind: 'file', relativePath, sourcePath: fullPath });
-    }
-  }
-}
-
-/**
- * Walks a directory reached via a followed symlink. Entries inside are added
- * to the archive at paths relative to the *link's* location in the source
- * tree (linkRelPath), not the target's real path. Nested symlinks are still
- * subject to the same follow rules and cycle protection.
- */
-function walkSymlinkedDir(
-  realDir: string,
-  linkRelPath: string,
-  zipFileName: string,
-  callback: (entry: WalkEntry) => void,
-  ig: Ignore | undefined,
-  symlinks: SymlinkMode,
-  root: string,
-  seen: Set<string>
-): void {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(realDir, { withFileTypes: true });
-  } catch (err: any) {
-    core.warning(`Skipping unreadable directory: ${realDir} (${err.code ?? err.message})`);
-    return;
-  }
-
-  for (const entry of entries) {
-    const fullPath = path.join(realDir, entry.name);
-    const relativePath = `${linkRelPath}/${entry.name}`;
-
-    if (entry.isSymbolicLink()) {
-      if (ig && ig.ignores(relativePath)) continue;
-      let realPath: string;
-      try {
-        realPath = fs.realpathSync(fullPath);
-      } catch {
-        continue;
-      }
-      const rootReal = fs.realpathSync(root);
-      const rel = path.relative(rootReal, realPath);
-      if (rel.startsWith('..') || path.isAbsolute(rel)) continue;
-      if (seen.has(realPath)) continue;
-      seen.add(realPath);
-      let stats: fs.Stats;
-      try {
-        stats = fs.statSync(realPath);
-      } catch {
-        continue;
-      }
-      if (stats.isDirectory()) {
-        walkSymlinkedDir(realPath, relativePath, zipFileName, callback, ig, symlinks, root, seen);
-      } else if (stats.isFile()) {
-        callback({ kind: 'file', relativePath, sourcePath: realPath });
-      }
-    } else if (entry.isDirectory()) {
-      if (ig && ig.ignores(relativePath + '/')) continue;
-      walkSymlinkedDir(fullPath, relativePath, zipFileName, callback, ig, symlinks, root, seen);
-    } else if (entry.isFile()) {
-      if (relativePath === zipFileName) continue;
       if (ig && ig.ignores(relativePath)) continue;
       callback({ kind: 'file', relativePath, sourcePath: fullPath });
     }
@@ -243,24 +218,22 @@ export async function createDeploymentPackage(
   const ignoreFile = loadIgnorePatterns(effectiveDir);
   const ignoreFileContent = ignoreFile ? ignoreFile.content : null;
 
-  await createZipFile(zipFileName, excludePatterns, ignoreFileContent, sourceDirectory, symlinks);
+  await createZipFile(zipFileName, excludePatterns, ignoreFileContent, effectiveDir, symlinks);
 
   return { path: zipFileName };
 }
 
 /**
  * Creates a zip file using archiver. Walks the source tree with `walkFiles`
- * and emits file, symlink, or inlined-target entries per the requested
- * symlink mode. When ignoreFileContent is null and no symlink handling is
- * needed, falls back to archiver's built-in glob for backward compatibility —
- * but glob doesn't handle symlinks, so we always walk when symlinks='preserve'
- * or when we need to include them.
+ * and routes each emitted entry to `archive.file()` for regular files or
+ * inlined symlink targets, or `archive.symlink()` for preserved symlink
+ * entries.
  */
 export async function createZipFile(
   zipFileName: string,
   excludePatterns: string[],
   ignoreFileContent: string | null,
-  sourceDirectory?: string,
+  sourceDirectory: string,
   symlinks: SymlinkMode = 'preserve'
 ): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -273,8 +246,6 @@ export async function createZipFile(
 
     archive.pipe(output);
 
-    const effectiveDir = sourceDirectory ?? process.cwd();
-
     const ig = ignore();
     if (ignoreFileContent) {
       ig.add(ignoreFileContent);
@@ -284,7 +255,7 @@ export async function createZipFile(
     }
     const hasIgnoreRules = !!ignoreFileContent || excludePatterns.length > 0;
 
-    walkFiles(effectiveDir, zipFileName, (entry) => {
+    walkFiles(sourceDirectory, zipFileName, (entry) => {
       if (entry.kind === 'file') {
         archive.file(entry.sourcePath, { name: entry.relativePath });
       } else {

@@ -374,7 +374,7 @@ This enables managed platform updates and configures Elastic Beanstalk to automa
 | `create-s3-bucket-if-not-exists` | Create S3 bucket if it doesn't exist | `true` |
 | `s3-bucket-name` | Custom S3 bucket name for deployment packages | `elasticbeanstalk-{region}-{accountId}` |
 | `exclude-patterns` | Comma-separated glob patterns to exclude from auto-created packages | None |
-| `symlinks` | How to handle symlinks in auto-created packages. `preserve` records them as symlink entries (matches EB CLI). `follow` inlines the target contents for symlinks whose targets live inside the source directory; external symlinks are skipped. Useful for Next.js apps whose `.next/node_modules/` is populated with in-tree symlinks. | `preserve` |
+| `symlinks` | How to handle symlinks in auto-created packages. `preserve` records them as symlink entries (matches EB CLI). `follow` inlines the target contents for symlinks whose targets live inside the source directory; external symlinks are skipped. | `preserve` |
 
 ## Outputs
 

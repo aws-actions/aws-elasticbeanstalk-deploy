@@ -48,6 +48,7 @@ jest.mock('path', () => ({
   join: jest.fn((...args) => args.join('/')),
   relative: jest.fn((from, to) => to),
   isAbsolute: jest.fn((p) => typeof p === 'string' && p.startsWith('/')),
+  sep: '/',
 }));
 
 jest.mock('archiver', () => {
@@ -825,6 +826,56 @@ describe('Main Functions', () => {
       const entries = collectEntries('/project', 'deploy.zip', undefined, 'follow');
       expect(entries).toEqual([
         { kind: 'file', relativePath: 'link-to-real', sourcePath: '/project/real-target.js' },
+        { kind: 'file', relativePath: 'index.js', sourcePath: '/project/index.js' },
+      ]);
+    });
+
+    it('should include multiple symlinks to the same file target when symlinks="follow"', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            makeDirent('alias-one', { isSymlink: true }),
+            makeDirent('alias-two', { isSymlink: true }),
+            makeDirent('index.js'),
+          ] as any;
+        }
+        return [] as any;
+      });
+      mockedFs.realpathSync.mockImplementation((p: any) => {
+        if (String(p) === '/project/alias-one') return '/project/shared.js' as any;
+        if (String(p) === '/project/alias-two') return '/project/shared.js' as any;
+        if (String(p) === '/project') return '/project' as any;
+        return p as any;
+      });
+      mockedFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+
+      const entries = collectEntries('/project', 'deploy.zip', undefined, 'follow');
+      expect(entries).toEqual([
+        { kind: 'file', relativePath: 'alias-one', sourcePath: '/project/shared.js' },
+        { kind: 'file', relativePath: 'alias-two', sourcePath: '/project/shared.js' },
+        { kind: 'file', relativePath: 'index.js', sourcePath: '/project/index.js' },
+      ]);
+    });
+
+    it('should skip cyclic directory symlinks when symlinks="follow"', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            makeDirent('cycle-link', { isSymlink: true }),
+            makeDirent('index.js'),
+          ] as any;
+        }
+        return [] as any;
+      });
+      mockedFs.realpathSync.mockImplementation((p: any) => {
+        if (String(p) === '/project/cycle-link') return '/project' as any;
+        if (String(p) === '/project') return '/project' as any;
+        return p as any;
+      });
+      mockedFs.statSync.mockReturnValue({ isDirectory: () => true, isFile: () => false } as any);
+
+      const entries = collectEntries('/project', 'deploy.zip', undefined, 'follow');
+      expect(entries).toEqual([
         { kind: 'file', relativePath: 'index.js', sourcePath: '/project/index.js' },
       ]);
     });
