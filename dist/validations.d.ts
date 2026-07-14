@@ -19,7 +19,6 @@ export interface Inputs {
     cnamePrefix?: string;
     sourceDirectory?: string;
     excludePatterns: string;
-    symlinks: 'preserve' | 'follow';
     optionSettings?: string;
 }
 export declare function validateAllInputs(): {
