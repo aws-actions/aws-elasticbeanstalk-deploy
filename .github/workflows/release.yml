@@ -3,7 +3,7 @@ name: Release with Artifact Attestation
 on:
   push:
     tags:
-      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+      - 'v*.*.*' # Only vX.Y.Z release tags; excludes floating major tags like v1
 
 permissions:
   contents: write      # Create releases
@@ -15,8 +15,17 @@ jobs:
     name: Build, Attest, and Release
     runs-on: ubuntu-latest
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -87,3 +96,24 @@ jobs:
             dist/index.js.sha256
             action.yml.sha256
           generate_release_notes: true
+
+      - name: Update major version tag
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag ${GITHUB_REF_NAME} is not a stable vX.Y.Z release — skipping major tag update."
+            exit 0
+          fi
+          MAJOR="v$(echo "${GITHUB_REF_NAME#v}" | cut -d. -f1)"
+          RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}"
+          echo "Moving ${MAJOR} -> ${GITHUB_SHA} (from tag ${GITHUB_REF_NAME})"
+          git tag -f -a "${MAJOR}" "${GITHUB_SHA}" -m "${MAJOR} -> ${GITHUB_REF_NAME}
+
+          Floating tag tracking the latest ${MAJOR}.x.y release.
+          Currently points to: ${GITHUB_REF_NAME}
+          Release notes: ${RELEASE_URL}"
+          git push origin "${MAJOR}" --force

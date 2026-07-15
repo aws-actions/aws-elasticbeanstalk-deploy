@@ -11,6 +11,7 @@ A GitHub Action for deploying applications to AWS Elastic Beanstalk with automat
   - [Step 3: Create IAM Roles for Elastic Beanstalk](#step-3-create-iam-roles-for-elastic-beanstalk)
   - [Step 4: Add GitHub Secrets](#step-4-add-github-secrets)
 - [Quick Start](#quick-start)
+- [Versioning](#versioning)
 - [Inputs](#inputs)
 - [Outputs](#outputs)
 - [Examples](#examples)
@@ -210,7 +211,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy to Elastic Beanstalk
-        uses: aws-actions/aws-elasticbeanstalk-deploy@v1.0.0
+        uses: aws-actions/aws-elasticbeanstalk-deploy@v1
         with:
           aws-region: ${{ env.AWS_REGION }}
           application-name: ${{ env.APPLICATION_NAME }}
@@ -260,7 +261,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy to Elastic Beanstalk
-        uses: aws-actions/aws-elasticbeanstalk-deploy@v1.0.0
+        uses: aws-actions/aws-elasticbeanstalk-deploy@v1
         with:
           aws-region: ${{ env.AWS_REGION }}
           application-name: ${{ env.APPLICATION_NAME }}
@@ -280,6 +281,31 @@ jobs:
               }
             ]
 ```
+
+## Versioning
+
+This action follows semantic versioning and publishes both immutable release tags and a floating major-version tag.
+
+| Reference | Points to | Recommended for |
+|---|---|---|
+| `@v1` | Latest `v1.x.y` release | Most users — automatically receives patches and non-breaking updates |
+| `@v1.0.4` | An exact release | Reproducible pins when you need to lock a specific version |
+| `@<full-sha>` | An exact commit | Strictest supply-chain posture — see [GitHub's guidance on pinning to a SHA](https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-third-party-actions) |
+
+Examples:
+
+```yaml
+# Get the latest v1.x.y release (recommended)
+- uses: aws-actions/aws-elasticbeanstalk-deploy@v1
+
+# Pin to a specific release
+- uses: aws-actions/aws-elasticbeanstalk-deploy@v1.0.4
+
+# Pin to a commit SHA (strictest)
+- uses: aws-actions/aws-elasticbeanstalk-deploy@1f56e4e813ae4eb167e69ca324234c336c1df573 # v1.0.4
+```
+
+Every release is signed with a [SLSA build provenance attestation](https://slsa.dev/spec/v1.0/provenance) and can be verified with the GitHub CLI. See the release notes on each release for verification instructions.
 
 ## Inputs
 
