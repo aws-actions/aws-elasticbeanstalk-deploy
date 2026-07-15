@@ -193,42 +193,6 @@ export async function applicationVersionExists(
   }
 }
 
-/**
- * Get S3 location for an existing version
- */
-export async function getVersionS3Location(
-  clients: AWSClients,
-  applicationName: string,
-  versionLabel: string
-): Promise<{ bucket: string; key: string }> {
-  try {
-    const command = new DescribeApplicationVersionsCommand({
-      ApplicationName: applicationName,
-      VersionLabels: [versionLabel],
-    });
-
-    const response = await clients.getElasticBeanstalkClient().send(command);
-
-    if (!response.ApplicationVersions || response.ApplicationVersions.length === 0) {
-      throw new Error(`Version ${versionLabel} not found`);
-    }
-
-    const version = response.ApplicationVersions[0];
-    const bucket = version.SourceBundle?.S3Bucket;
-    const key = version.SourceBundle?.S3Key;
-
-    if (!bucket || !key) {
-      throw new Error(
-        `Application Version ${versionLabel} has incomplete S3 source bundle information. ` +
-        `Bucket ${bucket ? 'found' : 'missing'}, Key ${key ? 'found' : 'missing'}`
-      );
-    }
-
-    return { bucket, key };
-  } catch (error) {
-    throw new Error(`Failed to get S3 location for application version ${versionLabel}: ${error}`);
-  }
-}
 
 /**
  * Check if an environment exists
