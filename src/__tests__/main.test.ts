@@ -4,6 +4,7 @@ jest.mock('@actions/core', () => ({
   getBooleanInput: jest.fn(),
   setFailed: jest.fn(),
   setOutput: jest.fn(),
+  setSecret: jest.fn(),
   info: jest.fn(),
   warning: jest.fn(),
   error: jest.fn(),
@@ -103,7 +104,7 @@ import {
   createEnvironment,
   getEnvironmentInfo,
 } from '../aws-operations';
-import { waitForDeploymentCompletion, waitForHealthRecovery } from '../monitoring';
+import { waitForDeploymentCompletion, waitForHealthRecovery, sanitizeResourceIdentifiers } from '../monitoring';
 import { AWSClients } from '../aws-clients';
 
 const mockedCore = core as jest.Mocked<typeof core>;
@@ -152,6 +153,7 @@ describe('Main Functions', () => {
     });
     mockedCore.getBooleanInput.mockImplementation((name: string) => {
       if (name === 'create-s3-bucket-if-not-exists') return true;
+      if (name === 'verbose-logging') return true;
       return false;
     });
   });
@@ -413,7 +415,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({
         Environments: [{ Status: 'Ready' }],
       });
-      await waitForDeploymentCompletion(mockClients, 'app', 'env', 900);
+      await waitForDeploymentCompletion(mockClients, 'app', 'env', 900, true);
       expect(mockSend).toHaveBeenCalled();
     });
   });
@@ -423,7 +425,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({
         Environments: [{ Health: 'Green', Status: 'Ready' }],
       });
-      await waitForHealthRecovery(mockClients, 'app', 'env', 900);
+      await waitForHealthRecovery(mockClients, 'app', 'env', 900, true);
       expect(mockSend).toHaveBeenCalled();
     });
 
@@ -431,7 +433,7 @@ describe('Main Functions', () => {
       mockSend.mockResolvedValue({
         Environments: [{ Health: 'Yellow', Status: 'Ready' }],
       });
-      await waitForHealthRecovery(mockClients, 'app', 'env', 900);
+      await waitForHealthRecovery(mockClients, 'app', 'env', 900, true);
       expect(mockSend).toHaveBeenCalled();
     });
 
@@ -449,7 +451,7 @@ describe('Main Functions', () => {
             }
           ]
         });
-      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1))
+      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1, true))
         .rejects.toThrow('Environment health recovery failed - health is Red');
     });
 
@@ -463,8 +465,45 @@ describe('Main Functions', () => {
           Environments: [{ Health: 'Red', Status: 'Updating' }],
         });
       });
-      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1))
+      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1, true))
         .rejects.toThrow('Environment health recovery timed out after 1s');
+    });
+  });
+
+  describe('sanitizeResourceIdentifiers', () => {
+    it('should mask EC2 instance IDs', () => {
+      expect(sanitizeResourceIdentifiers('Failed on i-0a1b2c3d4e5f67890'))
+        .toBe('Failed on ***');
+    });
+
+    it('should mask security group IDs', () => {
+      expect(sanitizeResourceIdentifiers('Created security group named: sg-0a1b2c3d4e5f67890'))
+        .toBe('Created security group named: ***');
+    });
+
+    it('should mask ARNs', () => {
+      expect(sanitizeResourceIdentifiers('Policy: arn:aws:autoscaling:us-west-2:000000000000:scalingPolicy:example'))
+        .toBe('Policy: ***');
+    });
+
+    it('should mask EB-generated resource names', () => {
+      expect(sanitizeResourceIdentifiers('Created: awseb-e-abcdefghij-stack-AWSEBAutoScalingGroup-EXAMPLE123'))
+        .toBe('Created: ***');
+    });
+
+    it('should mask IP addresses', () => {
+      expect(sanitizeResourceIdentifiers('Connected to 10.0.0.1'))
+        .toBe('Connected to ***');
+    });
+
+    it('should mask multiple identifiers in one message', () => {
+      expect(sanitizeResourceIdentifiers('Instance i-0a1b2c3d4e5f67890 in sg-0f9e8d7c6b5a43210 failed'))
+        .toBe('Instance *** in *** failed');
+    });
+
+    it('should leave non-sensitive text unchanged', () => {
+      expect(sanitizeResourceIdentifiers('Deployment completed successfully'))
+        .toBe('Deployment completed successfully');
     });
   });
 
@@ -536,6 +575,70 @@ describe('Main Functions', () => {
       expect(mockedCore.setOutput).toHaveBeenCalledWith('environment-id', 'e-123');
       expect(mockedCore.setOutput).toHaveBeenCalledWith('deployment-action-type', 'update');
       expect(mockedCore.setOutput).toHaveBeenCalledWith('version-label', 'v1.0.0');
+    });
+
+    it('should mask sensitive identifiers when verbose-logging is false', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'verbose-logging') return false;
+        return false;
+      });
+
+      // With useExistingApplicationVersionIfAvailable = false, applicationVersionExists is skipped
+      // Call sequence: STS -> HeadBucket -> PutObject -> CreateAppVersion -> DescribeEnvs -> UpdateEnv -> GetEnvInfo
+      mockSend.mockImplementation(() => {
+        const callCount = mockSend.mock.calls.length;
+
+        if (callCount === 1) return Promise.resolve({ Account: '123456789012' });
+        if (callCount === 2) return Promise.resolve({});  // HeadBucket
+        if (callCount === 3) return Promise.resolve({});  // PutObject
+        if (callCount === 4) return Promise.resolve({});  // CreateAppVersion
+        if (callCount === 5) return Promise.resolve({ Environments: [{ Status: 'Ready', Health: 'Green' }] });
+        if (callCount === 6) return Promise.resolve({});  // UpdateEnvironment
+        if (callCount === 7) return Promise.resolve({ Environments: [{ CNAME: 'test.com', EnvironmentId: 'e-123', Status: 'Ready', Health: 'Green' }] });
+
+        return Promise.resolve({});
+      });
+
+      await run();
+
+      expect(mockedCore.setFailed).not.toHaveBeenCalled();
+      expect((mockedCore as any).setSecret).toHaveBeenCalledWith('123456789012');
+      expect((mockedCore as any).setSecret).toHaveBeenCalledWith('test-app');
+      expect((mockedCore as any).setSecret).toHaveBeenCalledWith('test-env');
+      expect((mockedCore as any).setSecret).toHaveBeenCalledWith('v1.0.0');
+      // Outputs are still set (masking is handled by the runner, not by withholding outputs)
+      expect(mockedCore.setOutput).toHaveBeenCalledWith('environment-url', 'test.com');
+      expect(mockedCore.setOutput).toHaveBeenCalledWith('environment-id', 'e-123');
+      expect(mockedCore.setOutput).toHaveBeenCalledWith('version-label', 'v1.0.0');
+    });
+
+    it('should not mask identifiers when verbose-logging is true', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'verbose-logging') return true;
+        return false;
+      });
+
+      // With useExistingApplicationVersionIfAvailable = false, applicationVersionExists is skipped
+      mockSend.mockImplementation(() => {
+        const callCount = mockSend.mock.calls.length;
+
+        if (callCount === 1) return Promise.resolve({ Account: '123456789012' });
+        if (callCount === 2) return Promise.resolve({});  // HeadBucket
+        if (callCount === 3) return Promise.resolve({});  // PutObject
+        if (callCount === 4) return Promise.resolve({});  // CreateAppVersion
+        if (callCount === 5) return Promise.resolve({ Environments: [{ Status: 'Ready', Health: 'Green' }] });
+        if (callCount === 6) return Promise.resolve({});  // UpdateEnvironment
+        if (callCount === 7) return Promise.resolve({ Environments: [{ CNAME: 'test.com', EnvironmentId: 'e-123', Status: 'Ready', Health: 'Green' }] });
+
+        return Promise.resolve({});
+      });
+
+      await run();
+
+      expect(mockedCore.setFailed).not.toHaveBeenCalled();
+      expect((mockedCore as any).setSecret).not.toHaveBeenCalled();
     });
 
     it('should create new environment when create-environment-if-not-exists is true', async () => {

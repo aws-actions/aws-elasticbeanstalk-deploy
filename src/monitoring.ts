@@ -6,12 +6,47 @@ import {
 import { AWSClients } from './aws-clients';
 
 /**
+ * Strip dynamic AWS resource identifiers from a message.
+ * Used to sanitize error messages when verbose logging is disabled.
+ */
+export function sanitizeResourceIdentifiers(message: string): string {
+  return message
+    // EC2 instance IDs: i-0abc123def
+    .replace(/\bi-[0-9a-f]{8,17}\b/g, '***')
+    // Security group IDs: sg-0abc123def
+    .replace(/\bsg-[0-9a-f]{8,17}\b/g, '***')
+    // ENI IDs: eni-0abc123
+    .replace(/\beni-[0-9a-f]{8,17}\b/g, '***')
+    // Subnet IDs: subnet-0abc123
+    .replace(/\bsubnet-[0-9a-f]{8,17}\b/g, '***')
+    // VPC IDs: vpc-0abc123
+    .replace(/\bvpc-[0-9a-f]{8,17}\b/g, '***')
+    // Launch template IDs: lt-0abc123def
+    .replace(/\blt-[0-9a-f]{8,17}\b/g, '***')
+    // EBS volume IDs: vol-0abc123def
+    .replace(/\bvol-[0-9a-f]{8,17}\b/g, '***')
+    // Elastic IP allocation IDs: eipalloc-0abc123
+    .replace(/\beipalloc-[0-9a-f]{8,17}\b/g, '***')
+    // NAT gateway IDs: nat-0abc123
+    .replace(/\bnat-[0-9a-f]{8,17}\b/g, '***')
+    // EB-generated resource names: awseb-e-xxx-AWSEBLoa-xxx (must precede env ID pattern)
+    .replace(/\bawseb-[a-zA-Z0-9_-]+\b/g, '***')
+    // EB environment IDs: e-abcdefghij
+    .replace(/\be-[a-z0-9]{10,}\b/g, '***')
+    // ARNs: arn:aws:service:region:account:resource
+    .replace(/\barn:aws:[a-zA-Z0-9_/:.+*-]+\b/g, '***')
+    // IP addresses
+    .replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, '***');
+}
+
+/**
  * Fetch recent environment events for debugging and check for fatal/error events
  */
 async function describeRecentEvents(
   clients: AWSClients,
   applicationName: string,
   environmentName: string,
+  verboseLogging: boolean,
   lastSeenEventDate?: Date,
   deploymentStartTime?: Date
 ): Promise<{ hasError: boolean; errorMessage?: string; lastEventDate?: Date }> {
@@ -44,20 +79,20 @@ async function describeRecentEvents(
 
       if (newEvents.length > 0) {
         // Only show header on first call
-        if (!lastSeenEventDate) {
+        if (verboseLogging && !lastSeenEventDate) {
           core.info('📋 Recent events:');
         }
-        
+
         // Sort events by timestamp in ascending order (oldest first)
         const sortedEvents = [...newEvents].sort((a, b) => {
           const dateA = a.EventDate?.getTime() || 0;
           const dateB = b.EventDate?.getTime() || 0;
           return dateA - dateB;
         });
-        
+
         const fatalOrErrorEvents: Array<{ message: string }> = [];
         let mostRecentDate: Date | undefined;
-        
+
         sortedEvents.forEach((event) => {
           const eventDate = event.EventDate;
           if (eventDate) {
@@ -66,18 +101,23 @@ async function describeRecentEvents(
               mostRecentDate = eventDate;
             }
           }
-          
-          const timestamp = eventDate?.toISOString() || 'Unknown time';
+
           const severity = event.Severity || 'INFO';
           const message = event.Message || 'No message';
 
           if (severity === 'ERROR' || severity === 'FATAL') {
-            core.error(`  [${timestamp}] ${severity}: ${message}`);
             fatalOrErrorEvents.push({ message });
-          } else if (severity === 'WARN') {
-            core.warning(`  [${timestamp}] ${severity}: ${message}`);
-          } else {
-            core.info(`  [${timestamp}] ${severity}: ${message}`);
+          }
+
+          if (verboseLogging) {
+            const timestamp = eventDate?.toISOString() || 'Unknown time';
+            if (severity === 'ERROR' || severity === 'FATAL') {
+              core.error(`  [${timestamp}] ${severity}: ${message}`);
+            } else if (severity === 'WARN') {
+              core.warning(`  [${timestamp}] ${severity}: ${message}`);
+            } else {
+              core.info(`  [${timestamp}] ${severity}: ${message}`);
+            }
           }
         });
 
@@ -85,7 +125,7 @@ async function describeRecentEvents(
           const errorMessage = fatalOrErrorEvents[0].message || 'Unknown error occurred';
           return { hasError: true, errorMessage, lastEventDate: mostRecentDate };
         }
-        
+
         return { hasError: false, lastEventDate: mostRecentDate };
       }
     }    
@@ -106,6 +146,7 @@ export async function waitForDeploymentCompletion(
   applicationName: string,
   environmentName: string,
   timeout: number,
+  verboseLogging: boolean,
   deploymentActionType?: 'create' | 'update',
   deploymentStartTime?: Date
 ): Promise<Date | undefined> {
@@ -137,6 +178,7 @@ export async function waitForDeploymentCompletion(
           clients,
           applicationName,
           environmentName,
+          verboseLogging,
           lastSeenEventDate,
           deploymentStartTime
         );
@@ -149,6 +191,7 @@ export async function waitForDeploymentCompletion(
         clients,
         applicationName,
         environmentName,
+        verboseLogging,
         lastSeenEventDate,
         deploymentStartTime
       );
@@ -172,7 +215,7 @@ export async function waitForDeploymentCompletion(
   }
 
   // Timeout occurred - fetch events to help diagnose
-  await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+  await describeRecentEvents(clients, applicationName, environmentName, verboseLogging, lastSeenEventDate, deploymentStartTime);
   throw new Error(`Deployment timed out after ${timeout}s`);
 }
 
@@ -184,6 +227,7 @@ export async function waitForHealthRecovery(
   applicationName: string,
   environmentName: string,
   timeout: number,
+  verboseLogging: boolean,
   deploymentStartTime?: Date,
   lastEventDateFromDeployment?: Date
 ): Promise<void> {
@@ -218,6 +262,7 @@ export async function waitForHealthRecovery(
           clients,
           applicationName,
           environmentName,
+          verboseLogging,
           lastSeenEventDate,
           deploymentStartTime
         );
@@ -247,6 +292,6 @@ export async function waitForHealthRecovery(
   }
 
   // Timeout occurred - fetch events to help diagnose
-  await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+  await describeRecentEvents(clients, applicationName, environmentName, verboseLogging, lastSeenEventDate, deploymentStartTime);
   throw new Error(`Environment health recovery timed out after ${timeout}s`);
 }
