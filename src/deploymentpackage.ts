@@ -52,13 +52,15 @@ export function walkFiles(
   try {
     rootReal = fs.realpathSync(dir);
   } catch (err: any) {
-    core.warning(`Skipping unreadable directory: ${dir} (${err.code ?? err.message})`);
-    return;
+    // An unreadable root means nothing to package — fail rather than
+    // silently producing an empty archive.
+    throw new Error(`Cannot read source directory '${dir}': ${err.code ?? err.message}`);
   }
 
   // Tracks directories on the recursion stack to break cyclic symlinks.
+  // Walking from the resolved root keeps joined paths canonical.
   const ancestors = new Set<string>([rootReal]);
-  walkTree(dir, '', zipFileName, callback, ig, symlinks, rootReal, ancestors);
+  walkTree(rootReal, '', zipFileName, callback, ig, symlinks, rootReal, ancestors);
 }
 
 /**
@@ -144,7 +146,11 @@ function walkTree(
 
     if (entry.isDirectory()) {
       if (ig && ig.ignores(relativePath + '/')) continue;
+      // Register real dirs too, so links back at them (a/loop -> a) are
+      // caught as cycles instead of duplicating contents.
+      ancestors.add(fullPath);
       walkTree(fullPath, relativePath, zipFileName, callback, ig, symlinks, rootReal, ancestors);
+      ancestors.delete(fullPath);
     } else if (entry.isFile()) {
       if (ig && ig.ignores(relativePath)) continue;
       callback({ kind: 'file', relativePath, sourcePath: fullPath });

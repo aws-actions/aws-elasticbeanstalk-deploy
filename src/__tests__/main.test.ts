@@ -699,6 +699,7 @@ describe('Main Functions', () => {
     }
 
     beforeEach(() => {
+      mockedFs.realpathSync.mockImplementation((p: any) => p);
       originalRelative = mockedPath.relative;
       mockedPath.relative.mockImplementation((from: string, to: string) => {
         if (to.startsWith(from + '/')) {
@@ -878,6 +879,73 @@ describe('Main Functions', () => {
       expect(entries).toEqual([
         { kind: 'file', relativePath: 'index.js', sourcePath: '/project/index.js' },
       ]);
+    });
+
+    it('should skip a symlink pointing at a real ancestor directory without duplicating contents', () => {
+      // /project/a/loop -> /project/a
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [makeDirent('a', { isDir: true })] as any;
+        }
+        if (String(dir) === '/project/a') {
+          return [
+            makeDirent('f.js'),
+            makeDirent('loop', { isSymlink: true }),
+          ] as any;
+        }
+        return [] as any;
+      });
+      mockedFs.realpathSync.mockImplementation((p: any) => {
+        if (String(p) === '/project/a/loop') return '/project/a' as any;
+        return p as any;
+      });
+      mockedFs.statSync.mockReturnValue({ isDirectory: () => true, isFile: () => false } as any);
+
+      const entries = collectEntries('/project', 'deploy.zip', undefined, 'follow');
+      expect(entries).toEqual([
+        { kind: 'file', relativePath: 'a/f.js', sourcePath: '/project/a/f.js' },
+      ]);
+    });
+
+    it('should still follow sibling symlinks to the same real directory when not cyclic', () => {
+      // l1 and l2 -> /project/shared, which is never on the stack when walked
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            makeDirent('shared', { isDir: true }),
+            makeDirent('l1', { isSymlink: true }),
+            makeDirent('l2', { isSymlink: true }),
+          ] as any;
+        }
+        if (String(dir) === '/project/shared') {
+          return [makeDirent('lib.js')] as any;
+        }
+        return [] as any;
+      });
+      mockedFs.realpathSync.mockImplementation((p: any) => {
+        if (String(p) === '/project/l1' || String(p) === '/project/l2') return '/project/shared' as any;
+        return p as any;
+      });
+      mockedFs.statSync.mockReturnValue({ isDirectory: () => true, isFile: () => false } as any);
+
+      const entries = collectEntries('/project', 'deploy.zip', undefined, 'follow');
+      expect(entries).toEqual([
+        { kind: 'file', relativePath: 'shared/lib.js', sourcePath: '/project/shared/lib.js' },
+        { kind: 'file', relativePath: 'l1/lib.js', sourcePath: '/project/shared/lib.js' },
+        { kind: 'file', relativePath: 'l2/lib.js', sourcePath: '/project/shared/lib.js' },
+      ]);
+    });
+
+    it('should throw when the source root directory cannot be resolved', () => {
+      mockedFs.realpathSync.mockImplementation(() => {
+        const err: any = new Error('EACCES: permission denied');
+        err.code = 'EACCES';
+        throw err;
+      });
+
+      expect(() => collectFiles('/project', 'deploy.zip')).toThrow(
+        "Cannot read source directory '/project': EACCES"
+      );
     });
 
     it('should skip external symlinks when symlinks="follow"', () => {
