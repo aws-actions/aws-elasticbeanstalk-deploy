@@ -374,6 +374,7 @@ This enables managed platform updates and configures Elastic Beanstalk to automa
 | `create-s3-bucket-if-not-exists` | Create S3 bucket if it doesn't exist | `true` |
 | `s3-bucket-name` | Custom S3 bucket name for deployment packages | `elasticbeanstalk-{region}-{accountId}` |
 | `exclude-patterns` | Comma-separated glob patterns to exclude from auto-created packages | None |
+| `verbose-logging` | Show infrastructure identifiers (account ID, bucket names, environment names, version labels) in logs. When `false`, identifiers are masked and event details are suppressed. | `false` |
 
 ## Outputs
 

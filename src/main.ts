@@ -14,10 +14,13 @@ import {
   getEnvironmentInfo,
   validateOptionSettingsForCreate,
 } from './aws-operations';
-import { waitForDeploymentCompletion, waitForHealthRecovery } from './monitoring';
+import { waitForDeploymentCompletion, waitForHealthRecovery, sanitizeResourceIdentifiers } from './monitoring';
 
 export async function run(): Promise<void> {
   const startTime = Date.now();
+  // Hoisted so the catch block can sanitize error messages.
+  // Defaults to false (quiet) if an error is thrown before inputs are parsed.
+  let verboseLogging = false;
 
   try {
     core.info('🚀 Starting Elastic Beanstalk deployment...');
@@ -35,6 +38,14 @@ export async function run(): Promise<void> {
       useExistingApplicationVersionIfAvailable, createS3BucketIfNotExists, s3BucketName, cnamePrefix, excludePatterns,
       optionSettings
     } = inputs as Inputs;
+    verboseLogging = (inputs as Inputs).verboseLogging;
+
+    if (!verboseLogging) {
+      core.setSecret(applicationName);
+      core.setSecret(environmentName);
+      core.setSecret(applicationVersionLabel);
+      if (s3BucketName) core.setSecret(s3BucketName);
+    }
 
     core.startGroup('📋 Validating inputs');
     core.info(`Application: ${applicationName}`);
@@ -50,6 +61,10 @@ export async function run(): Promise<void> {
     const accountId = await getAwsAccountId(clients, maxRetries, retryDelay);
     core.info('✅ AWS account verified');
     core.endGroup();
+
+    if (!verboseLogging) {
+      core.setSecret(accountId);
+    }
 
     core.startGroup('📦 Creating deployment package');
     const { path: packagePath } = await createDeploymentPackage(
@@ -164,16 +179,21 @@ export async function run(): Promise<void> {
     let lastSeenEventDate: Date | undefined;
     if (waitForDeployment) {
       core.startGroup('⏳ Waiting for deployment');
-      lastSeenEventDate = await waitForDeploymentCompletion(clients, applicationName, environmentName, deploymentTimeout, deploymentActionType, deploymentStartTime);
+      lastSeenEventDate = await waitForDeploymentCompletion(clients, applicationName, environmentName, deploymentTimeout, verboseLogging, deploymentActionType, deploymentStartTime);
       core.endGroup();
     }
     if (waitForEnvironmentRecovery) {
       core.startGroup('🏥 Waiting for environment health');
-      await waitForHealthRecovery(clients, applicationName, environmentName, deploymentTimeout, deploymentStartTime, lastSeenEventDate);
+      await waitForHealthRecovery(clients, applicationName, environmentName, deploymentTimeout, verboseLogging, deploymentStartTime, lastSeenEventDate);
       core.endGroup();
     }
 
     const envInfo = await getEnvironmentInfo(clients, applicationName, environmentName);
+
+    if (!verboseLogging) {
+      core.setSecret(envInfo.url);
+      core.setSecret(envInfo.id);
+    }
 
     core.setOutput('environment-url', envInfo.url);
     core.setOutput('environment-id', envInfo.id);
@@ -183,7 +203,7 @@ export async function run(): Promise<void> {
     core.setOutput('version-label', applicationVersionLabel);
 
     const totalTime = Math.round((Date.now() - startTime) / 1000);
-    
+
     core.startGroup('📤 Deployment Outputs');
     core.info(`Environment URL: ${envInfo.url}`);
     core.info(`Environment ID: ${envInfo.id}`);
@@ -197,8 +217,11 @@ export async function run(): Promise<void> {
 
   } catch (error) {
     const totalTime = Math.round((Date.now() - startTime) / 1000);
-    core.error(`❌ Deployment failed after ${totalTime}s: ${(error as Error).message}`);
-    core.setFailed(`Deployment failed: ${(error as Error).message}`);
+    const errorMessage = verboseLogging
+      ? (error as Error).message
+      : sanitizeResourceIdentifiers((error as Error).message);
+    core.error(`❌ Deployment failed after ${totalTime}s: ${errorMessage}`);
+    core.setFailed(`Deployment failed: ${errorMessage}`);
   }
 }
 

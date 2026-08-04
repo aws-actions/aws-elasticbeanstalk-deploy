@@ -23,6 +23,7 @@ export interface Inputs {
   sourceDirectory?: string;
   excludePatterns: string;
   optionSettings?: string;
+  verboseLogging: boolean;
 }
 
 function validateRequiredInputs() {
@@ -158,6 +159,7 @@ function validateOptionalInputs() {
   const waitForEnvironmentRecovery = core.getBooleanInput('wait-for-environment-recovery');
   const useExistingApplicationVersionIfAvailable = core.getBooleanInput('use-existing-application-version-if-available');
   const createS3BucketIfNotExists = core.getBooleanInput('create-s3-bucket-if-not-exists');
+  const verboseLogging = core.getBooleanInput('verbose-logging');
 
   return {
     valid: true,
@@ -173,7 +175,8 @@ function validateOptionalInputs() {
     s3BucketName,
     cnamePrefix,
     excludePatterns,
-    optionSettings
+    optionSettings,
+    verboseLogging,
   };
 }
 
@@ -264,7 +267,8 @@ export function validateAllInputs(): { valid: boolean } & Partial<Inputs> {
     createS3BucketIfNotExists: optionalInputs.createS3BucketIfNotExists!,
     s3BucketName: optionalInputs.s3BucketName,
     excludePatterns: optionalInputs.excludePatterns!,
-    optionSettings: optionalInputs.optionSettings
+    optionSettings: optionalInputs.optionSettings,
+    verboseLogging: optionalInputs.verboseLogging!,
   };
 
   checkInputConflicts(validatedInputs);
