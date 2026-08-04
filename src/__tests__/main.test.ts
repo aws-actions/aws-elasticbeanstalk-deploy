@@ -948,6 +948,41 @@ describe('Main Functions', () => {
       );
     });
 
+    it('should throw when the source root resolves but cannot be listed', () => {
+      // realpathSync succeeds on a chmod 000 directory while readdirSync fails,
+      // so the root must be rejected here too rather than yielding an empty zip.
+      mockedFs.readdirSync.mockImplementation(() => {
+        const err: any = new Error('EACCES: permission denied');
+        err.code = 'EACCES';
+        throw err;
+      });
+
+      expect(() => collectFiles('/project', 'deploy.zip')).toThrow(
+        "Cannot read source directory '/project': EACCES"
+      );
+    });
+
+    it('should warn and skip an unreadable subdirectory without throwing', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            makeDirent('locked', { isDir: true }),
+            makeDirent('index.js'),
+          ] as any;
+        }
+        const err: any = new Error('EACCES: permission denied');
+        err.code = 'EACCES';
+        throw err;
+      });
+
+      const files = collectFiles('/project', 'deploy.zip');
+
+      expect(files).toEqual(['index.js']);
+      expect(core.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Skipping unreadable directory: /project/locked')
+      );
+    });
+
     it('should skip external symlinks when symlinks="follow"', () => {
       mockedFs.readdirSync.mockImplementation((dir: any) => {
         if (String(dir) === '/project') {

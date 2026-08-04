@@ -52,7 +52,7 @@ export function walkFiles(
   try {
     rootReal = fs.realpathSync(dir);
   } catch (err: any) {
-    // An unreadable root means nothing to package — fail rather than
+    // An unusable root means nothing to package — fail rather than
     // silently producing an empty archive.
     throw new Error(`Cannot read source directory '${dir}': ${err.code ?? err.message}`);
   }
@@ -60,14 +60,15 @@ export function walkFiles(
   // Tracks directories on the recursion stack to break cyclic symlinks.
   // Walking from the resolved root keeps joined paths canonical.
   const ancestors = new Set<string>([rootReal]);
-  walkTree(rootReal, '', zipFileName, callback, ig, symlinks, rootReal, ancestors);
+  walkTree(rootReal, '', zipFileName, callback, ig, symlinks, rootReal, ancestors, true);
 }
 
 /**
  * Internal recursive walker. `relBase` is the archive-relative prefix for
  * entries in `dir` (empty at the top level; the link's path when following a
  * directory symlink). `ancestors` tracks directories on the current stack to
- * prevent cycles — file symlinks are never blocked by it.
+ * prevent cycles — file symlinks are never blocked by it. `isRoot` is set only
+ * for the top-level call, where an unreadable directory is fatal.
  */
 function walkTree(
   dir: string,
@@ -77,12 +78,20 @@ function walkTree(
   ig: Ignore | undefined,
   symlinks: SymlinkMode,
   rootReal: string,
-  ancestors: Set<string>
+  ancestors: Set<string>,
+  isRoot = false
 ): void {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch (err: any) {
+    // A root we can resolve but cannot list (e.g. no read permission) would
+    // otherwise yield an empty archive, so treat it the same as an unusable
+    // root. Deeper directories are skipped with a warning instead: one bad
+    // subdirectory should not abort the whole package.
+    if (isRoot) {
+      throw new Error(`Cannot read source directory '${dir}': ${err.code ?? err.message}`);
+    }
     core.warning(`Skipping unreadable directory: ${dir} (${err.code ?? err.message})`);
     return;
   }
