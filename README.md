@@ -373,8 +373,8 @@ This enables managed platform updates and configures Elastic Beanstalk to automa
 | `use-existing-application-version-if-available` | Reuse existing application version if it exists (skips S3 upload and application version creation) | `true` |
 | `create-s3-bucket-if-not-exists` | Create S3 bucket if it doesn't exist | `true` |
 | `s3-bucket-name` | Custom S3 bucket name for deployment packages | `elasticbeanstalk-{region}-{accountId}` |
-| `exclude-patterns` | Comma-separated glob patterns to exclude from auto-created packages | None |
-| `symlinks` | How to handle symlinks in auto-created packages. `preserve` records them as symlink entries (matches EB CLI). `follow` inlines the target contents for symlinks whose targets live inside the source directory; external symlinks are skipped. | `preserve` |
+| `exclude-patterns` | Comma-separated patterns to exclude from auto-created packages. Uses **gitignore pattern syntax** — a bare name like `node_modules` or `*.log` matches at any depth, `dir/` matches directories only, and `!pattern` re-includes. | None |
+| `symlinks` | How to handle symlinks in auto-created packages. `preserve` (default) records them as symlink entries; targets are recorded verbatim without validation, so links pointing outside the source tree will be broken on the instance. `follow` replaces in-tree symlinks with a copy of their target's contents, skipping links that resolve outside the source directory — layouts sharing one directory across many links can multiply package size, so watch the 500 MB limit. Symlinks match `exclude-patterns` as files, not directories — use `linked-dir`, not `linked-dir/`. | `preserve` |
 
 ## Outputs
 
