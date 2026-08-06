@@ -72,6 +72,10 @@ inputs:
   exclude-patterns:
     description: 'Comma-separated list of patterns to exclude from deployment package (e.g., "*.git*,*node_modules*,*.env*")'
     required: false
+  symlinks:
+    description: 'How to handle symlinks when packaging: "preserve" stores them as symlink entries in the zip (matches EB CLI, default); "follow" inlines the target file contents for symlinks that resolve inside the source directory (external symlinks are skipped). Ignored when deployment-package-path is set.'
+    required: false
+    default: 'preserve'
   option-settings:
     description: 'Elastic Beanstalk option settings as JSON array. Required when creating a new environment - MUST include IAM settings: [{"Namespace":"aws:autoscaling:launchconfiguration","OptionName":"IamInstanceProfile","Value":"your-instance-profile"},{"Namespace":"aws:elasticbeanstalk:environment","OptionName":"ServiceRole","Value":"your-service-role"}]'
     required: false

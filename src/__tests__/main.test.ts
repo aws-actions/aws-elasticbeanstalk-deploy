@@ -22,6 +22,8 @@ jest.mock('fs', () => ({
   existsSync: jest.fn(),
   statSync: jest.fn(),
   readdirSync: jest.fn(() => []),
+  readlinkSync: jest.fn(),
+  realpathSync: jest.fn((p: any) => p),
   createReadStream: jest.fn(() => 'mock-stream'),
   createWriteStream: jest.fn(() => ({
     on: jest.fn((event, callback) => {
@@ -45,12 +47,16 @@ jest.mock('path', () => ({
   }),
   join: jest.fn((...args) => args.join('/')),
   relative: jest.fn((from, to) => to),
+  isAbsolute: jest.fn((p) => typeof p === 'string' && p.startsWith('/')),
+  sep: '/',
 }));
 
 jest.mock('archiver', () => {
   const mockArchive: any = {
     pipe: jest.fn(),
     glob: jest.fn(),
+    file: jest.fn(),
+    symlink: jest.fn(),
     finalize: jest.fn(),
     on: jest.fn((event: string, callback: () => void) => {
       if (event === 'close') {
@@ -173,35 +179,34 @@ describe('Main Functions', () => {
       const result = await createDeploymentPackage(undefined, 'v1.0.0', '*.git*,*.node*');
 
       expect(result.path).toBe('deploy-v1.0.0.zip');
-      
+
       const archiver = require('archiver');
       expect(archiver).toHaveBeenCalledWith('zip');
-      
-      // Verify the mock archive methods were called
+
       const mockArchiveInstance = archiver();
       expect(mockArchiveInstance.pipe).toHaveBeenCalled();
-      expect(mockArchiveInstance.glob).toHaveBeenCalledWith('**/*', { 
-        dot: true,
-        ignore: ['*.git*', '*.node*'] 
-      });
       expect(mockArchiveInstance.finalize).toHaveBeenCalled();
     });
 
-    it('should pass sourceDirectory as cwd to archiver glob', async () => {
+    it('should walk sourceDirectory when provided', async () => {
       mockedFs.existsSync.mockReturnValue(false);
       mockedFs.readFileSync.mockReturnValue(Buffer.from('test'));
+      mockedFs.readdirSync.mockReturnValueOnce([
+        { name: 'app.js', isDirectory: () => false, isSymbolicLink: () => false, isFile: () => true } as any,
+      ]);
+      const mockedPath = require('path') as jest.Mocked<typeof import('path')>;
+      mockedPath.relative.mockImplementation((from: string, to: string) => {
+        if (to.startsWith(from + '/')) return to.slice(from.length + 1);
+        return to;
+      });
 
-      const result = await createDeploymentPackage(undefined, 'v1.0.0', '*.git*', './frontend');
+      const result = await createDeploymentPackage(undefined, 'v1.0.0', '*.git*', '/frontend');
 
       expect(result.path).toBe('deploy-v1.0.0.zip');
-
       const archiver = require('archiver');
       const mockArchiveInstance = archiver();
-      expect(mockArchiveInstance.glob).toHaveBeenCalledWith('**/*', {
-        cwd: './frontend',
-        dot: true,
-        ignore: ['*.git*']
-      });
+      expect(mockedFs.readdirSync).toHaveBeenCalledWith('/frontend', expect.any(Object));
+      expect(mockArchiveInstance.file).toHaveBeenCalledWith('/frontend/app.js', { name: 'app.js' });
     });
 
     it('should fail when deployment-package-path does not exist', async () => {
@@ -681,11 +686,20 @@ describe('Main Functions', () => {
 
     function collectFiles(dir: string, zipFileName: string, ig?: any): string[] {
       const files: string[] = [];
-      walkFiles(dir, zipFileName, (rel) => files.push(rel), ig);
+      walkFiles(dir, zipFileName, (entry) => {
+        if (entry.kind === 'file') files.push(entry.relativePath);
+      }, ig);
       return files;
     }
 
+    function collectEntries(dir: string, zipFileName: string, ig?: any, symlinks?: 'preserve' | 'follow') {
+      const entries: any[] = [];
+      walkFiles(dir, zipFileName, (entry) => entries.push(entry), ig, symlinks);
+      return entries;
+    }
+
     beforeEach(() => {
+      mockedFs.realpathSync.mockImplementation((p: any) => p);
       originalRelative = mockedPath.relative;
       mockedPath.relative.mockImplementation((from: string, to: string) => {
         if (to.startsWith(from + '/')) {
@@ -774,7 +788,7 @@ describe('Main Functions', () => {
       expect(files).not.toContain('debug.log');
     });
 
-    it('should skip symlinks to prevent circular recursion', () => {
+    it('should preserve symlinks as symlink entries by default (EB CLI parity)', () => {
       mockedFs.readdirSync.mockImplementation((dir: any) => {
         if (String(dir) === '/project') {
           return [
@@ -784,9 +798,211 @@ describe('Main Functions', () => {
         }
         return [] as any;
       });
+      mockedFs.readlinkSync.mockReturnValue('..' as any);
+
+      const entries = collectEntries('/project', 'deploy.zip');
+      expect(entries).toEqual([
+        { kind: 'symlink', relativePath: 'link-to-parent', target: '..' },
+        { kind: 'file', relativePath: 'real-file.js', sourcePath: '/project/real-file.js' },
+      ]);
+    });
+
+    it('should follow in-tree symlinks and inline target contents when symlinks="follow"', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            makeDirent('link-to-real', { isSymlink: true }),
+            makeDirent('index.js'),
+          ] as any;
+        }
+        return [] as any;
+      });
+      mockedFs.realpathSync.mockImplementation((p: any) => {
+        if (String(p) === '/project/link-to-real') return '/project/real-target.js' as any;
+        if (String(p) === '/project') return '/project' as any;
+        return p as any;
+      });
+      mockedFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+
+      const entries = collectEntries('/project', 'deploy.zip', undefined, 'follow');
+      expect(entries).toEqual([
+        { kind: 'file', relativePath: 'link-to-real', sourcePath: '/project/real-target.js' },
+        { kind: 'file', relativePath: 'index.js', sourcePath: '/project/index.js' },
+      ]);
+    });
+
+    it('should include multiple symlinks to the same file target when symlinks="follow"', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            makeDirent('alias-one', { isSymlink: true }),
+            makeDirent('alias-two', { isSymlink: true }),
+            makeDirent('index.js'),
+          ] as any;
+        }
+        return [] as any;
+      });
+      mockedFs.realpathSync.mockImplementation((p: any) => {
+        if (String(p) === '/project/alias-one') return '/project/shared.js' as any;
+        if (String(p) === '/project/alias-two') return '/project/shared.js' as any;
+        if (String(p) === '/project') return '/project' as any;
+        return p as any;
+      });
+      mockedFs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true } as any);
+
+      const entries = collectEntries('/project', 'deploy.zip', undefined, 'follow');
+      expect(entries).toEqual([
+        { kind: 'file', relativePath: 'alias-one', sourcePath: '/project/shared.js' },
+        { kind: 'file', relativePath: 'alias-two', sourcePath: '/project/shared.js' },
+        { kind: 'file', relativePath: 'index.js', sourcePath: '/project/index.js' },
+      ]);
+    });
+
+    it('should skip cyclic directory symlinks when symlinks="follow"', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            makeDirent('cycle-link', { isSymlink: true }),
+            makeDirent('index.js'),
+          ] as any;
+        }
+        return [] as any;
+      });
+      mockedFs.realpathSync.mockImplementation((p: any) => {
+        if (String(p) === '/project/cycle-link') return '/project' as any;
+        if (String(p) === '/project') return '/project' as any;
+        return p as any;
+      });
+      mockedFs.statSync.mockReturnValue({ isDirectory: () => true, isFile: () => false } as any);
+
+      const entries = collectEntries('/project', 'deploy.zip', undefined, 'follow');
+      expect(entries).toEqual([
+        { kind: 'file', relativePath: 'index.js', sourcePath: '/project/index.js' },
+      ]);
+    });
+
+    it('should skip a symlink pointing at a real ancestor directory without duplicating contents', () => {
+      // /project/a/loop -> /project/a
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [makeDirent('a', { isDir: true })] as any;
+        }
+        if (String(dir) === '/project/a') {
+          return [
+            makeDirent('f.js'),
+            makeDirent('loop', { isSymlink: true }),
+          ] as any;
+        }
+        return [] as any;
+      });
+      mockedFs.realpathSync.mockImplementation((p: any) => {
+        if (String(p) === '/project/a/loop') return '/project/a' as any;
+        return p as any;
+      });
+      mockedFs.statSync.mockReturnValue({ isDirectory: () => true, isFile: () => false } as any);
+
+      const entries = collectEntries('/project', 'deploy.zip', undefined, 'follow');
+      expect(entries).toEqual([
+        { kind: 'file', relativePath: 'a/f.js', sourcePath: '/project/a/f.js' },
+      ]);
+    });
+
+    it('should still follow sibling symlinks to the same real directory when not cyclic', () => {
+      // l1 and l2 -> /project/shared, which is never on the stack when walked
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            makeDirent('shared', { isDir: true }),
+            makeDirent('l1', { isSymlink: true }),
+            makeDirent('l2', { isSymlink: true }),
+          ] as any;
+        }
+        if (String(dir) === '/project/shared') {
+          return [makeDirent('lib.js')] as any;
+        }
+        return [] as any;
+      });
+      mockedFs.realpathSync.mockImplementation((p: any) => {
+        if (String(p) === '/project/l1' || String(p) === '/project/l2') return '/project/shared' as any;
+        return p as any;
+      });
+      mockedFs.statSync.mockReturnValue({ isDirectory: () => true, isFile: () => false } as any);
+
+      const entries = collectEntries('/project', 'deploy.zip', undefined, 'follow');
+      expect(entries).toEqual([
+        { kind: 'file', relativePath: 'shared/lib.js', sourcePath: '/project/shared/lib.js' },
+        { kind: 'file', relativePath: 'l1/lib.js', sourcePath: '/project/shared/lib.js' },
+        { kind: 'file', relativePath: 'l2/lib.js', sourcePath: '/project/shared/lib.js' },
+      ]);
+    });
+
+    it('should throw when the source root directory cannot be resolved', () => {
+      mockedFs.realpathSync.mockImplementation(() => {
+        const err: any = new Error('EACCES: permission denied');
+        err.code = 'EACCES';
+        throw err;
+      });
+
+      expect(() => collectFiles('/project', 'deploy.zip')).toThrow(
+        "Cannot read source directory '/project': EACCES"
+      );
+    });
+
+    it('should throw when the source root resolves but cannot be listed', () => {
+      // realpathSync succeeds on a chmod 000 directory while readdirSync fails,
+      // so the root must be rejected here too rather than yielding an empty zip.
+      mockedFs.readdirSync.mockImplementation(() => {
+        const err: any = new Error('EACCES: permission denied');
+        err.code = 'EACCES';
+        throw err;
+      });
+
+      expect(() => collectFiles('/project', 'deploy.zip')).toThrow(
+        "Cannot read source directory '/project': EACCES"
+      );
+    });
+
+    it('should warn and skip an unreadable subdirectory without throwing', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            makeDirent('locked', { isDir: true }),
+            makeDirent('index.js'),
+          ] as any;
+        }
+        const err: any = new Error('EACCES: permission denied');
+        err.code = 'EACCES';
+        throw err;
+      });
 
       const files = collectFiles('/project', 'deploy.zip');
-      expect(files).toEqual(['real-file.js']);
+
+      expect(files).toEqual(['index.js']);
+      expect(core.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Skipping unreadable directory: /project/locked')
+      );
+    });
+
+    it('should skip external symlinks when symlinks="follow"', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            makeDirent('external-link', { isSymlink: true }),
+            makeDirent('index.js'),
+          ] as any;
+        }
+        return [] as any;
+      });
+      mockedFs.realpathSync.mockImplementation((p: any) => {
+        if (String(p) === '/project/external-link') return '/outside/somefile' as any;
+        if (String(p) === '/project') return '/project' as any;
+        return p as any;
+      });
+
+      const entries = collectEntries('/project', 'deploy.zip', undefined, 'follow');
+      expect(entries).toEqual([
+        { kind: 'file', relativePath: 'index.js', sourcePath: '/project/index.js' },
+      ]);
     });
 
     it('should exclude the zip file itself', () => {
@@ -865,7 +1081,6 @@ describe('Main Functions', () => {
     it('should filter files using ignore patterns and add only matching files', async () => {
       const archiver = require('archiver');
       const mockArchiveInstance = archiver();
-      mockArchiveInstance.file = jest.fn();
 
       mockedFs.readdirSync.mockImplementation((dir: any) => {
         if (String(dir) === '/project') {
@@ -899,14 +1114,11 @@ describe('Main Functions', () => {
       expect(fileNames).toContain('app.js');
       expect(fileNames).toContain('README.md');
       expect(fileNames).not.toContain('.env');
-
-      delete mockArchiveInstance.file;
     });
 
     it('should apply exclude patterns on top of ignore patterns', async () => {
       const archiver = require('archiver');
       const mockArchiveInstance = archiver();
-      mockArchiveInstance.file = jest.fn();
 
       mockedFs.readdirSync.mockImplementation((dir: any) => {
         if (String(dir) === '/project') {
@@ -940,20 +1152,24 @@ describe('Main Functions', () => {
       expect(fileNames).toContain('app.js');
       expect(fileNames).toContain('README.md');
       expect(fileNames).not.toContain('debug.log');
-
-      delete mockArchiveInstance.file;
     });
 
-    it('should use glob path when ignore content is empty', async () => {
+    it('should walk the source tree with exclude patterns when no ignore file is provided', async () => {
       const archiver = require('archiver');
       const mockArchiveInstance = archiver();
+      mockedFs.readdirSync.mockReturnValueOnce([
+        { name: 'app.js', isDirectory: () => false, isSymbolicLink: () => false, isFile: () => true } as any,
+        { name: 'debug.log', isDirectory: () => false, isSymbolicLink: () => false, isFile: () => true } as any,
+      ]);
 
-      await createZipFile('deploy.zip', ['*.log'], '', '/project');
+      await createZipFile('deploy.zip', ['*.log'], null, '/project');
 
-      expect(mockArchiveInstance.glob).toHaveBeenCalledWith(
-        '**/*',
-        expect.objectContaining({ cwd: '/project', ignore: ['*.log'] })
+      // *.log excluded, app.js included
+      expect(mockArchiveInstance.file).toHaveBeenCalledWith('/project/app.js', { name: 'app.js' });
+      const debugAdded = (mockArchiveInstance.file as jest.Mock).mock.calls.some(
+        (call: any[]) => call[1]?.name === 'debug.log'
       );
+      expect(debugAdded).toBe(false);
     });
   });
 
