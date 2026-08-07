@@ -580,11 +580,10 @@ describe('Main Functions', () => {
         return false;
       });
 
-      // Mock sequence: STS -> applicationVersionExists (true) -> getVersionS3Location -> DescribeEnvs -> UpdateEnv -> GetEnvInfo
-      // No S3 calls since version already exists
+      // Mock sequence: STS -> applicationVersionExists (true) -> DescribeEnvs -> UpdateEnv -> GetEnvInfo
+      // No S3 upload or version creation since version already exists
       mockSend
         .mockResolvedValueOnce({ Account: '123456789012' })
-        .mockResolvedValueOnce({ ApplicationVersions: [{ VersionLabel: 'v1.0.0', SourceBundle: { S3Bucket: 'my-bucket', S3Key: 'my-app/v1.0.0.zip' } }] })
         .mockResolvedValueOnce({ ApplicationVersions: [{ VersionLabel: 'v1.0.0', SourceBundle: { S3Bucket: 'my-bucket', S3Key: 'my-app/v1.0.0.zip' } }] })
         .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green' }] })
         .mockResolvedValueOnce({})
@@ -594,6 +593,80 @@ describe('Main Functions', () => {
 
       expect(mockedCore.setOutput).toHaveBeenCalledWith('deployment-action-type', 'update');
       expect(mockedCore.setOutput).toHaveBeenCalledWith('version-label', 'v1.0.0');
+    });
+
+    it('should fall back to existing version when create fails with already-exists and reuse is enabled', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'use-existing-application-version-if-available') return true;
+        return false;
+      });
+
+      const alreadyExistsError = new Error('Application Version v1.0.0 already exists.');
+      (alreadyExistsError as any).name = 'InvalidParameterValueException';
+
+      mockSend.mockImplementation(() => {
+        const callCount = mockSend.mock.calls.length;
+
+        if (callCount === 1) return Promise.resolve({ Account: '123456789012' }); // GetCallerIdentity
+        // applicationVersionExists - DescribeApplicationVersions fails (e.g. permissions)
+        if (callCount === 2) return Promise.reject(new Error('Access Denied'));
+        if (callCount === 3) return Promise.resolve({});  // HeadBucket
+        if (callCount === 4) return Promise.resolve({});  // PutObject
+        // CreateApplicationVersion - fails with already exists
+        if (callCount === 5) return Promise.reject(alreadyExistsError);
+        // No getVersionS3Location call - bucket/key not needed downstream
+        if (callCount === 6) return Promise.resolve({ Environments: [{ Status: 'Ready', Health: 'Green' }] }); // DescribeEnvironment
+        if (callCount === 7) return Promise.resolve({});  // UpdateEnvironment
+        if (callCount === 8) return Promise.resolve({ Environments: [{ CNAME: 'test.com', EnvironmentId: 'e-123', Status: 'Ready', Health: 'Green' }] }); // GetEnvironmentInfo
+
+        return Promise.resolve({});
+      });
+
+      await run();
+
+      // Should succeed with a warning, not fail
+      expect(mockedCore.setFailed).not.toHaveBeenCalled();
+      expect(mockedCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Falling back to existing version')
+      );
+      expect(mockedCore.setOutput).toHaveBeenCalledWith('deployment-action-type', 'update');
+      expect(mockedCore.setOutput).toHaveBeenCalledWith('version-label', 'v1.0.0');
+    });
+
+    it('should NOT fall back on already-exists when reuse is disabled', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        // use-existing-application-version-if-available defaults to false
+        return false;
+      });
+
+      const alreadyExistsError = new Error('Application Version v1.0.0 already exists.');
+      (alreadyExistsError as any).name = 'InvalidParameterValueException';
+
+      // When useExistingApplicationVersionIfAvailable is false, applicationVersionExists
+      // is never called (short-circuit evaluation), so the call sequence skips DescribeApplicationVersions
+      mockSend.mockImplementation(() => {
+        const callCount = mockSend.mock.calls.length;
+
+        if (callCount === 1) return Promise.resolve({ Account: '123456789012' }); // GetCallerIdentity
+        // No DescribeApplicationVersions call - short-circuited by !useExistingApplicationVersionIfAvailable
+        if (callCount === 2) return Promise.resolve({});  // HeadBucket
+        if (callCount === 3) return Promise.resolve({});  // PutObject
+        // CreateApplicationVersion - fails with already exists
+        if (callCount === 4) return Promise.reject(alreadyExistsError);
+
+        return Promise.resolve({});
+      });
+
+      await run();
+
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(
+        expect.stringContaining('Application Version v1.0.0 already exists.')
+      );
+      expect(mockedCore.warning).toHaveBeenCalledWith(
+        expect.stringContaining('use-existing-application-version-if-available is false')
+      );
     });
 
     it('should handle environment not exists without create flag', async () => {
