@@ -107,7 +107,8 @@ export async function waitForDeploymentCompletion(
   environmentName: string,
   timeout: number,
   deploymentActionType?: 'create' | 'update',
-  deploymentStartTime?: Date
+  deploymentStartTime?: Date,
+  expectedVersionLabel?: string
 ): Promise<Date | undefined> {
   core.info('⏳ Waiting for deployment to complete...');
 
@@ -115,7 +116,12 @@ export async function waitForDeploymentCompletion(
   const maxWait = timeout * 1000;
   let previousStatus: string | undefined;
   let lastSeenEventDate: Date | undefined;
-  
+  // 'Ready' on another version is ambiguous: either the environment has not acted on the
+  // request yet, or the update was rolled back. Only the state surviving this window is
+  // treated as a rollback.
+  const rollbackConfirmationMs = 30000;
+  let readyOnUnexpectedVersionSince: number | undefined;
+
   // Poll every 20 seconds for create, 10 seconds for update
   const pollInterval = deploymentActionType === 'create' ? 20000 : 10000;
 
@@ -130,8 +136,10 @@ export async function waitForDeploymentCompletion(
     if (response.Environments && response.Environments.length > 0) {
       const env = response.Environments[0];
       const status = env.Status;
+      const versionMismatch =
+        expectedVersionLabel !== undefined && env.VersionLabel !== expectedVersionLabel;
 
-      if (status === 'Ready') {
+      if (status === 'Ready' && !versionMismatch) {
         // Fetch and display final events before completing
         const finalEvents = await describeRecentEvents(
           clients,
@@ -140,8 +148,35 @@ export async function waitForDeploymentCompletion(
           lastSeenEventDate,
           deploymentStartTime
         );
+
+        if (finalEvents.hasError) {
+          throw new Error(
+            `Environment deployment failed - fatal or error event detected: ${finalEvents.errorMessage}`
+          );
+        }
+
         core.info('✅ Deployment complete');
         return finalEvents.lastEventDate || lastSeenEventDate;
+      }
+
+      if (status === 'Ready' && versionMismatch) {
+        readyOnUnexpectedVersionSince ??= Date.now();
+        if (Date.now() - readyOnUnexpectedVersionSince >= rollbackConfirmationMs) {
+          // Fetch and display final events before failing
+          await describeRecentEvents(
+            clients,
+            applicationName,
+            environmentName,
+            lastSeenEventDate,
+            deploymentStartTime
+          );
+          throw new Error(
+            `Environment deployment failed - environment is running version ${env.VersionLabel ?? 'unknown'} ` +
+            `instead of the requested ${expectedVersionLabel}, the update was most likely rolled back`
+          );
+        }
+      } else {
+        readyOnUnexpectedVersionSince = undefined;
       }
 
       // Check for fatal/error events during deployment
