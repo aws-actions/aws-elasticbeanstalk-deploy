@@ -165,7 +165,7 @@ export async function run(): Promise<void> {
     let lastSeenEventDate: Date | undefined;
     if (waitForDeployment) {
       core.startGroup('⏳ Waiting for deployment');
-      lastSeenEventDate = await waitForDeploymentCompletion(clients, applicationName, environmentName, deploymentTimeout, deploymentActionType, deploymentStartTime);
+      lastSeenEventDate = await waitForDeploymentCompletion(clients, applicationName, environmentName, deploymentTimeout, deploymentActionType, deploymentStartTime, applicationVersionLabel);
       core.endGroup();
     }
     if (waitForEnvironmentRecovery) {

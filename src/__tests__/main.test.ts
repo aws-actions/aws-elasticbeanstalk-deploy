@@ -78,6 +78,7 @@ jest.mock('@aws-sdk/client-elastic-beanstalk', () => ({
   UpdateEnvironmentCommand: jest.fn(),
   CreateEnvironmentCommand: jest.fn(),
   DescribeEnvironmentsCommand: jest.fn(),
+  DescribeEventsCommand: jest.fn(),
   DescribeApplicationVersionsCommand: jest.fn(),
   waitUntilEnvironmentUpdated: mockWaitUntil,
 }));
@@ -421,6 +422,109 @@ describe('Main Functions', () => {
       await waitForDeploymentCompletion(mockClients, 'app', 'env', 900);
       expect(mockSend).toHaveBeenCalled();
     });
+
+    const deploymentStartTime = new Date('2025-01-01T00:00:00Z');
+
+    it('should throw when the environment persistently runs a different version than requested', async () => {
+      jest.useFakeTimers();
+      try {
+        mockSend.mockResolvedValue({
+          Environments: [{ Status: 'Ready', VersionLabel: 'v1.0.0' }],
+        });
+
+        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, 'update', deploymentStartTime, 'v2.0.0');
+        const assertion = expect(deployment).rejects.toThrow(
+          'Environment deployment failed - environment is running version v1.0.0 instead of the requested v2.0.0'
+        );
+
+        await jest.advanceTimersByTimeAsync(40000);
+        await assertion;
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('should throw when the environment settles back on the previous version after updating', async () => {
+      jest.useFakeTimers();
+      try {
+        mockSend
+          .mockResolvedValueOnce({ Environments: [{ Status: 'Updating', VersionLabel: 'v2.0.0' }] })
+          .mockResolvedValue({ Environments: [{ Status: 'Ready', VersionLabel: 'v1.0.0' }] });
+
+        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, 'update', deploymentStartTime, 'v2.0.0');
+        const assertion = expect(deployment).rejects.toThrow(
+          'Environment deployment failed - environment is running version v1.0.0 instead of the requested v2.0.0'
+        );
+
+        await jest.advanceTimersByTimeAsync(60000);
+        await assertion;
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('should keep waiting while the environment has not acted on the request', async () => {
+      jest.useFakeTimers();
+      try {
+        mockSend.mockResolvedValue({
+          Environments: [{ Status: 'Ready', VersionLabel: 'v1.0.0' }],
+        });
+
+        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 1, 'update', deploymentStartTime, 'v2.0.0');
+        const assertion = expect(deployment).rejects.toThrow('Deployment timed out after 1s');
+
+        await jest.advanceTimersByTimeAsync(30000);
+        await assertion;
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('should complete when the requested version appears after a pre-update Ready poll', async () => {
+      jest.useFakeTimers();
+      try {
+        mockSend
+          .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', VersionLabel: 'v1.0.0' }] })
+          .mockResolvedValueOnce({})
+          .mockResolvedValue({ Environments: [{ Status: 'Ready', VersionLabel: 'v2.0.0' }] });
+
+        const deployment = waitForDeploymentCompletion(mockClients, 'app', 'env', 900, 'update', deploymentStartTime, 'v2.0.0');
+        const assertion = expect(deployment).resolves.toBeUndefined();
+
+        await jest.advanceTimersByTimeAsync(20000);
+        await assertion;
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('should throw when error events surface on the final Ready poll', async () => {
+      mockSend
+        .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', VersionLabel: 'v2.0.0' }] })
+        .mockResolvedValueOnce({
+          Events: [{
+            EventDate: new Date('2025-01-01T00:01:00Z'),
+            Severity: 'ERROR',
+            Message: 'Failed to deploy application.',
+          }],
+        });
+
+      await expect(
+        waitForDeploymentCompletion(mockClients, 'app', 'env', 900, 'update', deploymentStartTime, 'v2.0.0')
+      ).rejects.toThrow(
+        'Environment deployment failed - fatal or error event detected: Failed to deploy application.'
+      );
+    });
+
+    it('should complete when the environment runs the requested version', async () => {
+      mockSend.mockResolvedValue({
+        Environments: [{ Status: 'Ready', VersionLabel: 'v2.0.0' }],
+      });
+
+      await expect(
+        waitForDeploymentCompletion(mockClients, 'app', 'env', 900, 'update', deploymentStartTime, 'v2.0.0')
+      ).resolves.toBeUndefined();
+    });
   });
 
   describe('waitForHealthRecovery', () => {
@@ -445,6 +549,16 @@ describe('Main Functions', () => {
         .mockResolvedValueOnce({
           Environments: [{ Health: 'Red', Status: 'Ready' }],
         })
+        .mockResolvedValueOnce({ Events: [] });
+      await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1))
+        .rejects.toThrow('Environment health recovery failed - health is Red');
+    });
+
+    it('should throw when an error event surfaces while health is red', async () => {
+      mockSend
+        .mockResolvedValueOnce({
+          Environments: [{ Health: 'Red', Status: 'Updating' }],
+        })
         .mockResolvedValueOnce({
           Events: [
             {
@@ -455,7 +569,7 @@ describe('Main Functions', () => {
           ]
         });
       await expect(waitForHealthRecovery(mockClients, 'app', 'env', 1))
-        .rejects.toThrow('Environment health recovery failed - health is Red');
+        .rejects.toThrow('Environment health recovery failed - fatal or error event detected: Deployment failed');
     });
 
     it('should timeout', async () => {
