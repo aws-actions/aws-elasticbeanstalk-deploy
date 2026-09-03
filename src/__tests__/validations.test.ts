@@ -168,6 +168,106 @@ describe('Validation Functions', () => {
       expect(mockedCore.setFailed).toHaveBeenCalledWith('Deployment timeout must be a number, got: invalid');
     });
 
+    it('should fail validation for a poll-interval below the minimum', () => {
+      const validOptionSettings = JSON.stringify([
+        {
+          "Namespace": "aws:autoscaling:launchconfiguration",
+          "OptionName": "IamInstanceProfile",
+          "Value": "test-profile"
+        },
+        {
+          "Namespace": "aws:elasticbeanstalk:environment",
+          "OptionName": "ServiceRole",
+          "Value": "test-role"
+        }
+      ]);
+
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'solution-stack-name': '64bit Amazon Linux 2',
+          'deployment-timeout': '900',
+          'poll-interval': '1',
+          'option-settings': validOptionSettings,
+        };
+        return inputs[name] || '';
+      });
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(false);
+      expect(mockedCore.setFailed).toHaveBeenCalledWith('Poll interval must be at least 5 seconds, got: 1');
+    });
+
+    it('should fail validation for a poll-interval longer than the deployment timeout', () => {
+      const validOptionSettings = JSON.stringify([
+        {
+          "Namespace": "aws:autoscaling:launchconfiguration",
+          "OptionName": "IamInstanceProfile",
+          "Value": "test-profile"
+        },
+        {
+          "Namespace": "aws:elasticbeanstalk:environment",
+          "OptionName": "ServiceRole",
+          "Value": "test-role"
+        }
+      ]);
+
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'solution-stack-name': '64bit Amazon Linux 2',
+          'deployment-timeout': '120',
+          'poll-interval': '300',
+          'option-settings': validOptionSettings,
+        };
+        return inputs[name] || '';
+      });
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(false);
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(
+        'Poll interval cannot exceed the deployment timeout of 120 seconds, got: 300'
+      );
+    });
+
+    it('should leave poll-interval unset when it is not given', () => {
+      const validOptionSettings = JSON.stringify([
+        {
+          "Namespace": "aws:autoscaling:launchconfiguration",
+          "OptionName": "IamInstanceProfile",
+          "Value": "test-profile"
+        },
+        {
+          "Namespace": "aws:elasticbeanstalk:environment",
+          "OptionName": "ServiceRole",
+          "Value": "test-role"
+        }
+      ]);
+
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'solution-stack-name': '64bit Amazon Linux 2',
+          'deployment-timeout': '900',
+          'option-settings': validOptionSettings,
+        };
+        return inputs[name] || '';
+      });
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(true);
+      expect(result.pollInterval).toBeUndefined();
+    });
+
     it('should fail validation for invalid max-retries', () => {
       const validOptionSettings = JSON.stringify([
         {

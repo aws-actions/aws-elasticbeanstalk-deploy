@@ -44,6 +44,9 @@ inputs:
     description: 'Maximum time to wait for each wait phase (seconds). If both wait-for-deployment and wait-for-environment-recovery are enabled, the total maximum wait is 2× this value.'
     required: false
     default: '900'
+  poll-interval:
+    description: 'Seconds between environment checks while waiting (default 10 for an update, 20 for a create, 15 for health recovery). Raise it to make fewer API calls on a long rollout.'
+    required: false
   max-retries:
     description: 'Maximum number of retries for failed operations'
     required: false

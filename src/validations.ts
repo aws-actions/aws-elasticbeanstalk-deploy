@@ -14,6 +14,7 @@ export interface Inputs {
   waitForDeployment: boolean;
   waitForEnvironmentRecovery: boolean;
   deploymentTimeout: number;
+  pollInterval?: number;
   maxRetries: number;
   retryDelay: number;
   useExistingApplicationVersionIfAvailable: boolean;
@@ -60,6 +61,8 @@ function validateNumericInputs() {
   const deploymentTimeoutInput = core.getInput('deployment-timeout') || '900';
   const maxRetriesInput = core.getInput('max-retries') || '2';
   const retryDelayInput = core.getInput('retry-delay') || '5';
+  // Left unset the waits keep their own per-phase intervals, which differ from one another.
+  const pollIntervalInput = core.getInput('poll-interval');
 
   const deploymentTimeout = parseInt(deploymentTimeoutInput, 10);
   const maxRetries = parseInt(maxRetriesInput, 10);
@@ -78,6 +81,26 @@ function validateNumericInputs() {
   if (deploymentTimeout > 3600) {
     core.setFailed(`Deployment timeout cannot exceed 3600 seconds (1 hour), got: ${deploymentTimeout}`);
     return { valid: false };
+  }
+
+  let pollInterval: number | undefined;
+  if (pollIntervalInput) {
+    pollInterval = parseInt(pollIntervalInput, 10);
+
+    if (isNaN(pollInterval)) {
+      core.setFailed(`Poll interval must be a number, got: ${pollIntervalInput}`);
+      return { valid: false };
+    }
+
+    if (pollInterval < 5) {
+      core.setFailed(`Poll interval must be at least 5 seconds, got: ${pollInterval}`);
+      return { valid: false };
+    }
+
+    if (pollInterval > deploymentTimeout) {
+      core.setFailed(`Poll interval cannot exceed the deployment timeout of ${deploymentTimeout} seconds, got: ${pollInterval}`);
+      return { valid: false };
+    }
   }
 
   if (isNaN(maxRetries)) {
@@ -113,6 +136,7 @@ function validateNumericInputs() {
   return {
     valid: true,
     deploymentTimeout,
+    pollInterval,
     maxRetries,
     retryDelay
   };
@@ -267,6 +291,7 @@ export function validateAllInputs(): { valid: boolean } & Partial<Inputs> {
     solutionStackName: requiredInputs.solutionStackName,
     platformArn: requiredInputs.platformArn,
     deploymentTimeout: numericInputs.deploymentTimeout,
+    pollInterval: numericInputs.pollInterval,
     maxRetries: numericInputs.maxRetries,
     retryDelay: numericInputs.retryDelay,
     applicationVersionLabel: optionalInputs.applicationVersionLabel!,
