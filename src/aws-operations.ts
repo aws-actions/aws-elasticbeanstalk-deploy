@@ -88,6 +88,18 @@ export const AWS_S3_REGIONS = [
 
 export type AWSS3Region = typeof AWS_S3_REGIONS[number];
 
+/** Never worth retrying: credentials do not gain a permission while a caller sleeps. */
+export function isAuthorizationError(error: unknown): boolean {
+  const err = error as Error & { name?: string };
+  const message = err?.message || '';
+
+  return (
+    /accessdenied|access denied|not authorized|unauthorizedoperation|you do not have permission/i.test(message) ||
+    err?.name === 'AccessDeniedException' ||
+    err?.name === 'UnauthorizedOperation'
+  );
+}
+
 /**
  * Retry a function with exponential backoff
  */
@@ -109,10 +121,7 @@ export async function retryWithBackoff<T>(
       const message = err.message || '';
 
       // non-retryable authorization/permission errors - fail fast
-      const isAuthError =
-        /accessdenied|access denied|not authorized|unauthorizedoperation|you do not have permission/i.test(message) ||
-        err.name === 'AccessDeniedException' ||
-        err.name === 'UnauthorizedOperation';
+      const isAuthError = isAuthorizationError(err);
 
       // non-retryable EB application version already-exists errors - fail fast
       const isAppVersionExistsError =

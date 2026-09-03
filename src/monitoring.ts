@@ -2,8 +2,44 @@ import * as core from '@actions/core';
 import {
   DescribeEnvironmentsCommand,
   DescribeEventsCommand,
+  EnvironmentDescription,
 } from '@aws-sdk/client-elastic-beanstalk';
 import { AWSClients } from './aws-clients';
+import { isAuthorizationError } from './aws-operations';
+
+/**
+ * Read the environment, reporting a failed read rather than throwing it: each caller polls until
+ * its own timeout, so a transient failure is a tick to skip. Authorization failures are thrown —
+ * polling will not grant the permission.
+ */
+async function describeEnvironment(
+  clients: AWSClients,
+  applicationName: string,
+  environmentName: string
+): Promise<{ environment?: EnvironmentDescription; error?: unknown }> {
+  const command = new DescribeEnvironmentsCommand({
+    ApplicationName: applicationName,
+    EnvironmentNames: [environmentName],
+  });
+
+  try {
+    const response = await clients.getElasticBeanstalkClient().send(command);
+    return { environment: response.Environments?.[0] };
+  } catch (error) {
+    if (isAuthorizationError(error)) {
+      throw error;
+    }
+    core.warning(`Could not read the environment's status, retrying: ${error}`);
+    return { error };
+  }
+}
+
+/** Names a failed read in a timeout message, so it is not read as a deployment that never finished. */
+function timeoutMessage(message: string, lastDescribeError: unknown): string {
+  return lastDescribeError
+    ? `${message}; the last read of the environment's status failed: ${lastDescribeError}`
+    : message;
+}
 
 /**
  * Fetch recent environment events for debugging and check for fatal/error events
@@ -107,7 +143,8 @@ export async function waitForDeploymentCompletion(
   environmentName: string,
   timeout: number,
   deploymentActionType?: 'create' | 'update',
-  deploymentStartTime?: Date
+  deploymentStartTime?: Date,
+  pollInterval?: number
 ): Promise<Date | undefined> {
   core.info('⏳ Waiting for deployment to complete...');
 
@@ -115,20 +152,16 @@ export async function waitForDeploymentCompletion(
   const maxWait = timeout * 1000;
   let previousStatus: string | undefined;
   let lastSeenEventDate: Date | undefined;
-  
-  // Poll every 20 seconds for create, 10 seconds for update
-  const pollInterval = deploymentActionType === 'create' ? 20000 : 10000;
+  let lastDescribeError: unknown;
+
+  // Every 20s for create, 10s for update, unless the caller asked for fewer calls than that.
+  const pollIntervalMs = (pollInterval ?? (deploymentActionType === 'create' ? 20 : 10)) * 1000;
 
   while (Date.now() - startTime < maxWait) {
-    const command = new DescribeEnvironmentsCommand({
-      ApplicationName: applicationName,
-      EnvironmentNames: [environmentName],
-    });
+    const { environment: env, error } = await describeEnvironment(clients, applicationName, environmentName);
+    lastDescribeError = error;
 
-    const response = await clients.getElasticBeanstalkClient().send(command);
-
-    if (response.Environments && response.Environments.length > 0) {
-      const env = response.Environments[0];
+    if (env) {
       const status = env.Status;
 
       if (status === 'Ready') {
@@ -168,12 +201,12 @@ export async function waitForDeploymentCompletion(
       }
     }
 
-    await new Promise(resolve => setTimeout(resolve, pollInterval));
+    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
   }
 
   // Timeout occurred - fetch events to help diagnose
   await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
-  throw new Error(`Deployment timed out after ${timeout}s`);
+  throw new Error(timeoutMessage(`Deployment timed out after ${timeout}s`, lastDescribeError));
 }
 
 /**
@@ -185,7 +218,8 @@ export async function waitForHealthRecovery(
   environmentName: string,
   timeout: number,
   deploymentStartTime?: Date,
-  lastEventDateFromDeployment?: Date
+  lastEventDateFromDeployment?: Date,
+  pollInterval?: number
 ): Promise<void> {
   core.info('🏥 Waiting for environment health to recover...');
 
@@ -194,17 +228,15 @@ export async function waitForHealthRecovery(
   let previousStatus: string | undefined;
   let previousHealth: string | undefined;
   let lastSeenEventDate: Date | undefined = lastEventDateFromDeployment;
+  let lastDescribeError: unknown;
+
+  const pollIntervalMs = (pollInterval ?? 15) * 1000;
 
   while (Date.now() - startTime < maxWait) {
-    const command = new DescribeEnvironmentsCommand({
-      ApplicationName: applicationName,
-      EnvironmentNames: [environmentName],
-    });
+    const { environment: env, error } = await describeEnvironment(clients, applicationName, environmentName);
+    lastDescribeError = error;
 
-    const response = await clients.getElasticBeanstalkClient().send(command);
-
-    if (response.Environments && response.Environments.length > 0) {
-      const env = response.Environments[0];
+    if (env) {
       const health = env.Health;
       const status = env.Status;
 
@@ -243,10 +275,10 @@ export async function waitForHealthRecovery(
         previousHealth = health;
       }
     }
-    await new Promise(resolve => setTimeout(resolve, 15000));
+    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
   }
 
   // Timeout occurred - fetch events to help diagnose
   await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
-  throw new Error(`Environment health recovery timed out after ${timeout}s`);
+  throw new Error(timeoutMessage(`Environment health recovery timed out after ${timeout}s`, lastDescribeError));
 }

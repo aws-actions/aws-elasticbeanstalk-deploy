@@ -414,12 +414,43 @@ describe('Main Functions', () => {
   });
 
   describe('waitForDeploymentCompletion', () => {
+    // 5ms between polls keeps these tests quick; the action's own minimum is 5s.
+    const throttled = () => Object.assign(new Error('Rate exceeded'), { name: 'ThrottlingException' });
+
     it('should wait for deployment', async () => {
       mockSend.mockResolvedValue({
         Environments: [{ Status: 'Ready' }],
       });
       await waitForDeploymentCompletion(mockClients, 'app', 'env', 900);
       expect(mockSend).toHaveBeenCalled();
+    });
+
+    it('should keep polling when the environment cannot be read', async () => {
+      mockSend
+        .mockRejectedValueOnce(throttled())
+        .mockResolvedValue({ Environments: [{ Status: 'Ready' }] });
+
+      await waitForDeploymentCompletion(mockClients, 'app', 'env', 900, 'update', undefined, 0.005);
+
+      expect(mockedCore.warning).toHaveBeenCalledWith(expect.stringContaining('Rate exceeded'));
+    });
+
+    it('should name the failed read when it times out unable to see the environment', async () => {
+      mockSend.mockRejectedValue(throttled());
+
+      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 1, 'update', undefined, 0.005))
+        .rejects.toThrow("the last read of the environment's status failed");
+    });
+
+    it('should fail at once when reading the environment is not permitted', async () => {
+      mockSend.mockRejectedValue(Object.assign(
+        new Error('User is not authorized to perform: elasticbeanstalk:DescribeEnvironments'),
+        { name: 'AccessDeniedException' }
+      ));
+
+      await expect(waitForDeploymentCompletion(mockClients, 'app', 'env', 900, 'update', undefined, 0.005))
+        .rejects.toThrow('not authorized');
+      expect(mockSend).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -438,6 +469,16 @@ describe('Main Functions', () => {
       });
       await waitForHealthRecovery(mockClients, 'app', 'env', 900);
       expect(mockSend).toHaveBeenCalled();
+    });
+
+    it('should keep polling when the environment cannot be read', async () => {
+      mockSend
+        .mockRejectedValueOnce(Object.assign(new Error('Rate exceeded'), { name: 'ThrottlingException' }))
+        .mockResolvedValue({ Environments: [{ Health: 'Green', Status: 'Ready' }] });
+
+      await waitForHealthRecovery(mockClients, 'app', 'env', 900, undefined, undefined, 0.005);
+
+      expect(mockSend).toHaveBeenCalledTimes(2);
     });
 
     it('should throw error for red health', async () => {
