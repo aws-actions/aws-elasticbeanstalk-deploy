@@ -31,7 +31,7 @@ export async function run(): Promise<void> {
       awsRegion, applicationName, environmentName, applicationVersionLabel,
       deploymentPackagePath, sourceDirectory, solutionStackName, platformArn,
       createEnvironmentIfNotExists, createApplicationIfNotExists, waitForDeployment,
-      waitForEnvironmentRecovery, deploymentTimeout, maxRetries, retryDelay,
+      waitForEnvironmentRecovery, deploymentTimeout, pollInterval, maxRetries, retryDelay,
       useExistingApplicationVersionIfAvailable, createS3BucketIfNotExists, s3BucketName, cnamePrefix, excludePatterns,
       symlinks, optionSettings
     } = inputs as Inputs;
@@ -165,12 +165,12 @@ export async function run(): Promise<void> {
     let lastSeenEventDate: Date | undefined;
     if (waitForDeployment) {
       core.startGroup('⏳ Waiting for deployment');
-      lastSeenEventDate = await waitForDeploymentCompletion(clients, applicationName, environmentName, deploymentTimeout, deploymentActionType, deploymentStartTime);
+      lastSeenEventDate = await waitForDeploymentCompletion(clients, applicationName, environmentName, deploymentTimeout, deploymentActionType, deploymentStartTime, pollInterval);
       core.endGroup();
     }
     if (waitForEnvironmentRecovery) {
       core.startGroup('🏥 Waiting for environment health');
-      await waitForHealthRecovery(clients, applicationName, environmentName, deploymentTimeout, deploymentStartTime, lastSeenEventDate);
+      await waitForHealthRecovery(clients, applicationName, environmentName, deploymentTimeout, deploymentStartTime, lastSeenEventDate, pollInterval);
       core.endGroup();
     }
 

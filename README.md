@@ -368,6 +368,7 @@ This enables managed platform updates and configures Elastic Beanstalk to automa
 | `wait-for-deployment` | Wait for deployment to complete | `true` |
 | `wait-for-environment-recovery` | Wait for environment health to become Green or Yellow | `true` |
 | `deployment-timeout` | Maximum wait time **per wait phase** (seconds, 60-3600). If both `wait-for-deployment` and `wait-for-environment-recovery` are enabled, total maximum wait is 2× this value. | `900` |
+| `poll-interval` | Seconds between environment checks while waiting (5 to `deployment-timeout`). Raise it to make fewer API calls on a long rollout. | `10` update, `20` create, `15` health recovery |
 | `max-retries` | Maximum retry attempts for failed API calls (0-10) | `2` |
 | `retry-delay` | Initial delay between retries in seconds (1-60, uses exponential backoff) | `5` |
 | `use-existing-application-version-if-available` | Reuse existing application version if it exists (skips S3 upload and application version creation) | `true` |
