@@ -89,6 +89,19 @@ export const AWS_S3_REGIONS = [
 export type AWSS3Region = typeof AWS_S3_REGIONS[number];
 
 /**
+ * Check if an error indicates an application version already exists.
+ * Used to short-circuit retries and to handle race conditions gracefully.
+ */
+export function isApplicationVersionAlreadyExistsError(error: unknown): boolean {
+  const err = error as Error & { name?: string };
+  const message = err.message || '';
+  return (
+    /application version .* already exists/i.test(message) ||
+    (err.name === 'InvalidParameterValueException' && /already exists/i.test(message))
+  );
+}
+
+/**
  * Retry a function with exponential backoff
  */
 export async function retryWithBackoff<T>(
@@ -115,11 +128,7 @@ export async function retryWithBackoff<T>(
         err.name === 'UnauthorizedOperation';
 
       // non-retryable EB application version already-exists errors - fail fast
-      const isAppVersionExistsError =
-        /application version .* already exists/i.test(message) ||
-        (err.name === 'InvalidParameterValueException' && /already exists/i.test(message));
-
-      if (isAuthError || isAppVersionExistsError) {
+      if (isAuthError || isApplicationVersionAlreadyExistsError(err)) {
         throw err;
       }
 
@@ -176,47 +185,14 @@ export async function applicationVersionExists(
     const response = await clients.getElasticBeanstalkClient().send(command);
     return (response.ApplicationVersions?.length ?? 0) > 0;
   } catch (error) {
-    core.debug(`Error checking application version ${versionLabel} existence: ${error}`);
+    core.warning(
+      `Failed to check if application version ${versionLabel} exists: ${(error as Error).message}. ` +
+      'Assuming version does not exist.'
+    );
     return false;
   }
 }
 
-/**
- * Get S3 location for an existing version
- */
-export async function getVersionS3Location(
-  clients: AWSClients,
-  applicationName: string,
-  versionLabel: string
-): Promise<{ bucket: string; key: string }> {
-  try {
-    const command = new DescribeApplicationVersionsCommand({
-      ApplicationName: applicationName,
-      VersionLabels: [versionLabel],
-    });
-
-    const response = await clients.getElasticBeanstalkClient().send(command);
-
-    if (!response.ApplicationVersions || response.ApplicationVersions.length === 0) {
-      throw new Error(`Version ${versionLabel} not found`);
-    }
-
-    const version = response.ApplicationVersions[0];
-    const bucket = version.SourceBundle?.S3Bucket;
-    const key = version.SourceBundle?.S3Key;
-
-    if (!bucket || !key) {
-      throw new Error(
-        `Application Version ${versionLabel} has incomplete S3 source bundle information. ` +
-        `Bucket ${bucket ? 'found' : 'missing'}, Key ${key ? 'found' : 'missing'}`
-      );
-    }
-
-    return { bucket, key };
-  } catch (error) {
-    throw new Error(`Failed to get S3 location for application version ${versionLabel}: ${error}`);
-  }
-}
 
 /**
  * Check if an environment exists

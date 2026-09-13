@@ -1,4 +1,4 @@
-import { applicationVersionExists, getVersionS3Location, createApplicationVersion } from '../aws-operations';
+import { applicationVersionExists, createApplicationVersion } from '../aws-operations';
 import { AWSClients } from '../aws-clients';
 
 // Mock dependencies
@@ -52,12 +52,16 @@ describe('Version Management', () => {
       expect(result).toBe(false);
     });
 
-    it('should return false on error', async () => {
+    it('should return false on error and log a warning', async () => {
+      const core = require('@actions/core');
       mockSend.mockRejectedValue(new Error('API Error'));
 
       const result = await applicationVersionExists(mockClients, 'my-app', 'v1.0.0');
 
       expect(result).toBe(false);
+      expect(core.warning).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to check if application version v1.0.0 exists')
+      );
     });
 
     it('should handle empty response', async () => {
@@ -69,60 +73,6 @@ describe('Version Management', () => {
     });
   });
 
-  describe('getVersionS3Location', () => {
-    it('should return S3 bucket and key for existing version', async () => {
-      mockSend.mockResolvedValue({
-        ApplicationVersions: [{
-          VersionLabel: 'v1.0.0',
-          SourceBundle: {
-            S3Bucket: 'my-bucket',
-            S3Key: 'my-app/v1.0.0.zip',
-          },
-        }],
-      });
-
-      const result = await getVersionS3Location(mockClients, 'my-app', 'v1.0.0');
-
-      expect(result).toEqual({
-        bucket: 'my-bucket',
-        key: 'my-app/v1.0.0.zip',
-      });
-    });
-
-    it('should throw error if version not found', async () => {
-      mockSend.mockResolvedValue({
-        ApplicationVersions: [],
-      });
-
-      await expect(getVersionS3Location(mockClients, 'my-app', 'v2.0.0'))
-        .rejects.toThrow('Version v2.0.0 not found');
-    });
-
-    it('should throw error if version has no S3 source bundle', async () => {
-      mockSend.mockResolvedValue({
-        ApplicationVersions: [{
-          VersionLabel: 'v1.0.0',
-        }],
-      });
-
-      await expect(getVersionS3Location(mockClients, 'my-app', 'v1.0.0'))
-        .rejects.toThrow('has incomplete S3 source bundle information');
-    });
-
-    it('should throw error if S3 bucket is missing', async () => {
-      mockSend.mockResolvedValue({
-        ApplicationVersions: [{
-          VersionLabel: 'v1.0.0',
-          SourceBundle: {
-            S3Key: 'my-app/v1.0.0.zip',
-          },
-        }],
-      });
-
-      await expect(getVersionS3Location(mockClients, 'my-app', 'v1.0.0'))
-        .rejects.toThrow('has incomplete S3 source bundle information');
-    });
-  });
 
   describe('createApplicationVersion', () => {
     it('should create new application version', async () => {
