@@ -1,0 +1,77 @@
+name: Deploy to Elastic Beanstalk - Beanstalk Cluster Environment (Pre-Built Image)
+
+# Deploys a container image that this workflow builds and pushes to Amazon ECR.
+# The action skips source packaging and the S3 upload entirely and creates the
+# application version directly from the image URI.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-2
+  APPLICATION_NAME: cluster-app
+  ENVIRONMENT_NAME: cluster-app-env
+  ECR_REPOSITORY: cluster-app
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create ECR repository (if not exists)
+        run: |
+          aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} --region ${{ env.AWS_REGION }} 2>/dev/null || \
+          aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }} --region ${{ env.AWS_REGION }}
+
+      - name: Build and push container image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          # --platform matches the environment's default (x86) node architecture; if you
+          # deploy to arm64 nodes via the arch option setting, build linux/arm64 instead.
+          docker build --platform linux/amd64 -t "$REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA" .
+          docker push "$REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
+
+      - name: Deploy to Elastic Beanstalk
+        uses: aws-actions/aws-elasticbeanstalk-deploy@v1
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          application-name: ${{ env.APPLICATION_NAME }}
+          environment-name: ${{ env.ENVIRONMENT_NAME }}
+          version-label: cluster-${{ github.sha }}
+          image-uri: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          option-settings: |
+            [
+              {
+                "Namespace": "aws:elasticbeanstalk:eks",
+                "OptionName": "cluster-role",
+                "Value": "${{ secrets.CLUSTER_ROLE_ARN }}"
+              },
+              {
+                "Namespace": "aws:elasticbeanstalk:eks",
+                "OptionName": "node-role",
+                "Value": "${{ secrets.NODE_ROLE_ARN }}"
+              },
+              {
+                "Namespace": "aws:elasticbeanstalk:eks:environment",
+                "OptionName": "observability-role",
+                "Value": "${{ secrets.OBSERVABILITY_ROLE_ARN }}"
+              }
+            ]

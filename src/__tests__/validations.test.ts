@@ -269,6 +269,61 @@ describe('Validation Functions', () => {
       expect(result.retryDelay).toBe(5);
     });
 
+    it('should default deployment-timeout to 2400 when build-configuration is set', () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'build-configuration': JSON.stringify({ Type: 'docker', CodeBuildServiceRole: 'arn:role' }),
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(true);
+      expect(result.deploymentTimeout).toBe(2400);
+    });
+
+    it('should default deployment-timeout to 2400 in Beanstalk Cluster', () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'image-uri': '123456789012.dkr.ecr.us-east-1.amazonaws.com/app:v1',
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(true);
+      expect(result.deploymentTimeout).toBe(2400);
+    });
+
+    it('should honor an explicit deployment-timeout in Beanstalk Cluster', () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'image-uri': '123456789012.dkr.ecr.us-east-1.amazonaws.com/app:v1',
+          'deployment-timeout': '1200',
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(true);
+      expect(result.deploymentTimeout).toBe(1200);
+    });
+
   it('should pass validation for missing option-settings when not creating environment', () => {
     mockedCore.getInput.mockImplementation((name: string) => {
       const inputs: Record<string, string> = {
@@ -539,6 +594,180 @@ describe('Validation Functions', () => {
       expect(result.environmentName).toBe('test-env');
       expect(result.platformArn).toBe('arn:aws:elasticbeanstalk:us-east-1::platform/Python 3.11 running on 64bit Amazon Linux 2023/4.3.0');
       expect(result.solutionStackName).toBeUndefined();
+    });
+
+    it('should fail when both image-uri and build-configuration are provided', () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'image-uri': '123.dkr.ecr.us-east-1.amazonaws.com/app:v1',
+          'build-configuration': JSON.stringify({ Type: 'docker', CodeBuildServiceRole: 'arn:role' }),
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(false);
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('Cannot specify both image-uri and build-configuration'));
+    });
+
+    it('should fail when image-uri is combined with solution-stack-name', () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'image-uri': '123.dkr.ecr.us-east-1.amazonaws.com/app:v1',
+          'solution-stack-name': '64bit Amazon Linux 2',
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(false);
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('Cannot specify solution-stack-name or platform-arn together with image-uri or build-configuration'));
+    });
+
+    it('should fail when build-configuration is combined with platform-arn', () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'build-configuration': JSON.stringify({ Type: 'docker', CodeBuildServiceRole: 'arn:role' }),
+          'platform-arn': 'arn:aws:elasticbeanstalk:us-east-1::platform/Docker/1.0',
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(false);
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('Cannot specify solution-stack-name or platform-arn together with image-uri or build-configuration'));
+    });
+
+    it('should fail when build-configuration is missing required fields', () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'build-configuration': JSON.stringify({ CodeBuildServiceRole: 'arn:role' }),
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(false);
+      expect(mockedCore.setFailed).toHaveBeenCalledWith('build-configuration must include CodeBuildServiceRole and Type');
+    });
+
+    it('should pass any build-configuration object through without field-level validation', () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'build-configuration': JSON.stringify({
+            Type: 'buildpack', Buildpack: 'paketobuildpacks/builder-jammy-base', Architecture: 'arm64',
+            CodeBuildServiceRole: 'arn:role', ComputeType: 'BUILD_GENERAL1_LARGE', TimeoutInMinutes: 30,
+            SomeFutureField: { Nested: 'value' },
+          }),
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(true);
+      expect(mockedCore.setFailed).not.toHaveBeenCalled();
+    });
+
+    it('should fail when build-configuration is not a JSON object', () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'build-configuration': '["docker"]',
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(false);
+      expect(mockedCore.setFailed).toHaveBeenCalledWith('build-configuration must be a JSON object');
+    });
+
+    it('should skip source-directory validation and warn when image-uri is set', () => {
+      mockedFs.existsSync.mockReturnValue(false);
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'image-uri': '123.dkr.ecr.us-east-1.amazonaws.com/app:v1',
+          'source-directory': './nonexistent',
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(true);
+      expect(mockedCore.setFailed).not.toHaveBeenCalled();
+      expect(mockedCore.warning).toHaveBeenCalledWith(expect.stringContaining('image-uri is set, so source-directory will be ignored'));
+    });
+
+    it('should not apply the Beanstalk Cluster timeout default for a whitespace-only image-uri', () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'solution-stack-name': '64bit Amazon Linux 2',
+          'image-uri': '   ',
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(true);
+      expect(result.imageUri).toBeUndefined();
+      expect(result.deploymentTimeout).toBe(900);
+    });
+
+    it('should validate successfully with image-uri and no solution stack (Beanstalk Cluster BYOI)', () => {
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1',
+          'application-name': 'test-app',
+          'environment-name': 'test-env',
+          'image-uri': '123.dkr.ecr.us-east-1.amazonaws.com/app:v1',
+        };
+        return inputs[name] || '';
+      });
+      mockedCore.getBooleanInput.mockReturnValue(false);
+
+      const result = validateAllInputs();
+
+      expect(result.valid).toBe(true);
+      expect(result.imageUri).toBe('123.dkr.ecr.us-east-1.amazonaws.com/app:v1');
     });
 
   });

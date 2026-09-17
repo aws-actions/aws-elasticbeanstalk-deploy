@@ -41,9 +41,8 @@ inputs:
     required: false
     default: 'true'
   deployment-timeout:
-    description: 'Maximum time to wait for each wait phase (seconds). If both wait-for-deployment and wait-for-environment-recovery are enabled, the total maximum wait is 2× this value.'
+    description: 'Maximum time to wait for each wait phase (seconds): waiting for an existing environment to become Ready, the deployment (wait-for-deployment), and health recovery (wait-for-environment-recovery). With both waits enabled the total maximum wait is 3× this value. Defaults to 900, or 2400 when image-uri or build-configuration is set (the first Beanstalk Cluster environment in an account provisions an EKS cluster, which takes 15-20 minutes).'
     required: false
-    default: '900'
   max-retries:
     description: 'Maximum number of retries for failed operations'
     required: false
@@ -77,7 +76,13 @@ inputs:
     required: false
     default: 'preserve'
   option-settings:
-    description: 'Elastic Beanstalk option settings as JSON array. Required when creating a new environment - MUST include IAM settings: [{"Namespace":"aws:autoscaling:launchconfiguration","OptionName":"IamInstanceProfile","Value":"your-instance-profile"},{"Namespace":"aws:elasticbeanstalk:environment","OptionName":"ServiceRole","Value":"your-service-role"}]'
+    description: 'Elastic Beanstalk option settings as JSON array. Required when creating a new environment. Beanstalk Standard MUST include IAM settings: [{"Namespace":"aws:autoscaling:launchconfiguration","OptionName":"IamInstanceProfile","Value":"your-instance-profile"},{"Namespace":"aws:elasticbeanstalk:environment","OptionName":"ServiceRole","Value":"your-service-role"}]. Beanstalk Cluster MUST instead include: [{"Namespace":"aws:elasticbeanstalk:eks","OptionName":"cluster-role","Value":"your-cluster-role-arn"},{"Namespace":"aws:elasticbeanstalk:eks","OptionName":"node-role","Value":"your-node-role-arn"},{"Namespace":"aws:elasticbeanstalk:eks:environment","OptionName":"observability-role","Value":"your-observability-role-arn"}]'
+    required: false
+  image-uri:
+    description: 'Pre-built container image URI for Beanstalk Cluster BYOI (e.g., 123456789.dkr.ecr.us-west-2.amazonaws.com/my-app:v1). When set, the action creates a Beanstalk Cluster environment, skips packaging/S3 upload, and creates the application version with ImageSource. Mutually exclusive with build-configuration.'
+    required: false
+  build-configuration:
+    description: 'JSON object for Beanstalk Cluster auto-containerization (build from source): the Build settings, e.g. {"Type":"docker","CodeBuildServiceRole":"arn:..."}. When set, the action creates a Beanstalk Cluster environment and triggers a CodeBuild image build. Mutually exclusive with image-uri.'
     required: false
 
 outputs:

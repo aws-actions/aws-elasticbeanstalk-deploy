@@ -1,4 +1,4 @@
-name: Deploy to Elastic Beanstalk - Python Application
+name: Deploy to Elastic Beanstalk - Docker Application
 
 on:
   push:
@@ -7,8 +7,8 @@ on:
 
 env:
   AWS_REGION: us-east-2
-  APPLICATION_NAME: python-app
-  ENVIRONMENT_NAME: python-app-env
+  APPLICATION_NAME: docker-app
+  ENVIRONMENT_NAME: docker-app-env
 
 jobs:
   deploy:
@@ -22,7 +22,7 @@ jobs:
 
       - name: Create deployment package
         run: |
-          zip -r app.zip application.py requirements.txt
+          zip -r app.zip Dockerfile Dockerrun.aws.json application.py
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
@@ -31,13 +31,13 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy to Elastic Beanstalk
-        uses: aws-actions/aws-elasticbeanstalk-deploy@v1.0.0
+        uses: aws-actions/aws-elasticbeanstalk-deploy@v1
         with:
           aws-region: ${{ env.AWS_REGION }}
           application-name: ${{ env.APPLICATION_NAME }}
           environment-name: ${{ env.ENVIRONMENT_NAME }}
-          version-label: python-${{ github.sha }}
-          solution-stack-name: '64bit Amazon Linux 2023 v4.3.0 running Python 3.11'
+          version-label: docker-${{ github.sha }}
+          solution-stack-name: '64bit Amazon Linux 2023 v4.3.0 running Docker'
           deployment-package-path: app.zip
           option-settings: |
             [
@@ -50,10 +50,5 @@ jobs:
                 "Namespace": "aws:elasticbeanstalk:environment",
                 "OptionName": "ServiceRole",
                 "Value": "aws-elasticbeanstalk-service-role"
-              },
-              {
-                "Namespace": "aws:ec2:instances",
-                "OptionName": "InstanceTypes",
-                "Value": "t3.small"
               }
             ]

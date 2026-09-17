@@ -24,6 +24,8 @@ export interface Inputs {
   excludePatterns: string;
   symlinks: 'preserve' | 'follow';
   optionSettings?: string;
+  imageUri?: string;
+  buildConfiguration?: string;
 }
 
 function validateRequiredInputs() {
@@ -39,8 +41,9 @@ function validateRequiredInputs() {
     return { valid: false };
   }
 
-  // Validate AWS region format (e.g., us-east-1, eu-west-2, us-gov-east-1)
-  const regionPattern = /^(us(-gov)?|af|ap|ca|eu|il|me|sa)-(north|south|east|west|central|northeast|southeast|northwest|southwest)-\d$/;
+  // Validate AWS region format (e.g., us-east-1, eu-west-2, us-gov-east-1).
+  // \d+ (not \d) so a future multi-digit region suffix isn't rejected.
+  const regionPattern = /^(us(-gov)?|af|ap|ca|eu|il|me|sa)-(north|south|east|west|central|northeast|southeast|northwest|southwest)-\d+$/;
   if (!regionPattern.test(awsRegion)) {
     core.setFailed(`Invalid AWS region format: ${awsRegion}. Expected format like 'us-east-1' or 'us-gov-east-1'`);
     return { valid: false };
@@ -57,7 +60,12 @@ function validateRequiredInputs() {
 }
 
 function validateNumericInputs() {
-  const deploymentTimeoutInput = core.getInput('deployment-timeout') || '900';
+  // Beanstalk Cluster defaults higher: the first environment in an account has to provision an
+  // EKS cluster, which takes 15-20 minutes — longer than the classic 900s default, so a
+  // successful first deploy would otherwise be reported as a timeout failure.
+  const isClusterMode = !!(core.getInput('image-uri').trim() || core.getInput('build-configuration').trim());
+  const defaultDeploymentTimeout = isClusterMode ? '2400' : '900';
+  const deploymentTimeoutInput = core.getInput('deployment-timeout') || defaultDeploymentTimeout;
   const maxRetriesInput = core.getInput('max-retries') || '2';
   const retryDelayInput = core.getInput('retry-delay') || '5';
 
@@ -132,9 +140,12 @@ function validateOptionalInputs() {
   const s3BucketName = core.getInput('s3-bucket-name') || undefined;
   const cnamePrefix = core.getInput('cname-prefix') || undefined;
   const optionSettings = core.getInput('option-settings') || undefined;
+  const imageUri = core.getInput('image-uri').trim() || undefined;
+  const buildConfiguration = core.getInput('build-configuration').trim() || undefined;
 
-  // Validate source-directory exists and is a directory if provided
-  if (sourceDirectory) {
+  // Validate source-directory exists and is a directory if provided. Skipped for image-uri
+  // deployments, which never package source (checkInputConflicts warns that it's ignored).
+  if (sourceDirectory && !imageUri) {
     if (!fs.existsSync(sourceDirectory)) {
       core.setFailed(`source-directory '${sourceDirectory}' does not exist.`);
       return { valid: false };
@@ -155,6 +166,28 @@ function validateOptionalInputs() {
       }
     } catch (error) {
       core.setFailed(`Invalid JSON in option-settings: ${(error as Error).message}`);
+      return { valid: false };
+    }
+  }
+
+  if (imageUri && buildConfiguration) {
+    core.setFailed('Cannot specify both image-uri and build-configuration. Use image-uri for pre-built images (BYOI) or build-configuration for auto-containerization.');
+    return { valid: false };
+  }
+
+  if (buildConfiguration) {
+    try {
+      const parsed = JSON.parse(buildConfiguration);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        core.setFailed('build-configuration must be a JSON object');
+        return { valid: false };
+      }
+      if (!parsed.CodeBuildServiceRole || !parsed.Type) {
+        core.setFailed('build-configuration must include CodeBuildServiceRole and Type');
+        return { valid: false };
+      }
+    } catch (error) {
+      core.setFailed(`Invalid JSON in build-configuration: ${(error as Error).message}`);
       return { valid: false };
     }
   }
@@ -181,7 +214,9 @@ function validateOptionalInputs() {
     cnamePrefix,
     excludePatterns,
     symlinks,
-    optionSettings
+    optionSettings,
+    imageUri,
+    buildConfiguration
   };
 }
 
@@ -200,6 +235,19 @@ function checkInputConflicts(inputs: Partial<Inputs>): void {
       'Both deployment-package-path and a non-default symlinks value are specified. ' +
       'symlinks will be ignored since deployment-package-path takes precedence.'
     );
+  }
+
+  // image-uri deploys a pre-built image and never packages source, so packaging inputs are ignored
+  if (inputs.imageUri) {
+    const ignored = [
+      inputs.deploymentPackagePath && 'deployment-package-path',
+      inputs.sourceDirectory && 'source-directory',
+      inputs.excludePatterns && 'exclude-patterns',
+      inputs.symlinks && inputs.symlinks !== 'preserve' && 'symlinks',
+    ].filter(Boolean);
+    if (ignored.length > 0) {
+      core.warning(`image-uri is set, so ${ignored.join(', ')} will be ignored: no source bundle is packaged or uploaded for a pre-built image.`);
+    }
   }
 
   // Check if deployment-package-path is provided WITH source-directory
@@ -259,6 +307,16 @@ export function validateAllInputs(): { valid: boolean } & Partial<Inputs> {
     return { valid: false };
   }
 
+  // Beanstalk Cluster (image-uri/build-configuration) creates environments with Tier=Cluster,
+  // not a solution stack or platform - these inputs are mutually exclusive.
+  if ((optionalInputs.imageUri || optionalInputs.buildConfiguration) && (requiredInputs.solutionStackName || requiredInputs.platformArn)) {
+    core.setFailed(
+      'Cannot specify solution-stack-name or platform-arn together with image-uri or build-configuration. ' +
+      'Beanstalk Cluster environments (image-uri/build-configuration) use Tier=Cluster instead of a solution stack or platform.'
+    );
+    return { valid: false };
+  }
+
   const validatedInputs = {
     valid: true,
     awsRegion: requiredInputs.awsRegion,
@@ -281,7 +339,9 @@ export function validateAllInputs(): { valid: boolean } & Partial<Inputs> {
     s3BucketName: optionalInputs.s3BucketName,
     excludePatterns: optionalInputs.excludePatterns!,
     symlinks: optionalInputs.symlinks!,
-    optionSettings: optionalInputs.optionSettings
+    optionSettings: optionalInputs.optionSettings,
+    imageUri: optionalInputs.imageUri,
+    buildConfiguration: optionalInputs.buildConfiguration
   };
 
   checkInputConflicts(validatedInputs);
@@ -289,9 +349,9 @@ export function validateAllInputs(): { valid: boolean } & Partial<Inputs> {
   return validatedInputs;
 }
 
-export function parseJsonInput(jsonString: string, inputName: string) {
+export function parseJsonInput<T = unknown>(jsonString: string, inputName: string): T {
   try {
-    return JSON.parse(jsonString);
+    return JSON.parse(jsonString) as T;
   } catch (error) {
     throw new Error(`Invalid JSON in ${inputName} input: ${(error as Error).message}`);
   }

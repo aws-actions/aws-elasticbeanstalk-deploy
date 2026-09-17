@@ -167,6 +167,44 @@ describe('S3 Operations', () => {
       expect(mockSend).toHaveBeenCalledTimes(1); // HeadBucket only, no create attempt
     });
 
+    it('should retry a transient HeadBucket failure and not attempt to create the bucket when it then succeeds', async () => {
+      const serverError = new Error('Internal Server Error');
+      (serverError as any).$metadata = { httpStatusCode: 500 };
+
+      mockSend
+        .mockRejectedValueOnce(serverError) // HeadBucket attempt 1: 500
+        .mockResolvedValueOnce({}); // HeadBucket attempt 2: bucket exists
+
+      await createS3Bucket(mockClients, 'us-east-1', 'transient-error-bucket', '123456789012', 3, 0.001);
+
+      expect(mockSend).toHaveBeenCalledTimes(2); // two HeadBucket attempts, no CreateBucket
+    });
+
+    it('should surface a persistent non-404 HeadBucket failure after exhausting retries instead of creating the bucket', async () => {
+      const serverError = new Error('Internal Server Error');
+      (serverError as any).$metadata = { httpStatusCode: 500 };
+
+      mockSend.mockRejectedValue(serverError); // HeadBucket keeps returning 500
+
+      await expect(createS3Bucket(mockClients, 'us-east-1', 'transient-error-bucket', '123456789012', 2, 0.001))
+        .rejects.toThrow('Check S3 bucket failed after 3 attempts (2 retries): Internal Server Error');
+
+      expect(mockSend).toHaveBeenCalledTimes(3); // HeadBucket x3, no CreateBucket
+    });
+
+    it('should not retry a 404 HeadBucket and go straight to creating the bucket', async () => {
+      const notFound = new Error('NotFound');
+      (notFound as any).$metadata = { httpStatusCode: 404 };
+
+      mockSend
+        .mockRejectedValueOnce(notFound) // HeadBucket 404
+        .mockResolvedValueOnce({}); // CreateBucket
+
+      await createS3Bucket(mockClients, 'us-east-1', 'new-bucket', '123456789012', 3, 1);
+
+      expect(mockSend).toHaveBeenCalledTimes(2); // one HeadBucket + CreateBucket, no HeadBucket retries
+    });
+
     it('should bubble up AccessDenied permissions error without retrying', async () => {
       const accessDeniedError = new Error('Access Denied');
       accessDeniedError.name = 'AccessDenied';

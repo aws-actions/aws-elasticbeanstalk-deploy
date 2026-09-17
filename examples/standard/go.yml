@@ -1,4 +1,4 @@
-name: Deploy to Elastic Beanstalk - Node.js Application
+name: Deploy to Elastic Beanstalk - Go Application
 
 on:
   push:
@@ -7,8 +7,8 @@ on:
 
 env:
   AWS_REGION: us-east-2
-  APPLICATION_NAME: nodejs-app
-  ENVIRONMENT_NAME: nodejs-app-env
+  APPLICATION_NAME: go-app
+  ENVIRONMENT_NAME: go-app-env
 
 jobs:
   deploy:
@@ -20,9 +20,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.21'
+
+      - name: Build Go binary for Linux
+        run: |
+          GOOS=linux GOARCH=amd64 go build -o application application.go
+
       - name: Create deployment package
         run: |
-          zip -r app.zip app.js package.json index.html
+          zip -r app.zip application Procfile public/ .ebextensions/
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
@@ -31,13 +40,13 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy to Elastic Beanstalk
-        uses: aws-actions/aws-elasticbeanstalk-deploy@v1.0.0
+        uses: aws-actions/aws-elasticbeanstalk-deploy@v1
         with:
           aws-region: ${{ env.AWS_REGION }}
           application-name: ${{ env.APPLICATION_NAME }}
           environment-name: ${{ env.ENVIRONMENT_NAME }}
-          version-label: nodejs-${{ github.sha }}
-          solution-stack-name: '64bit Amazon Linux 2023 v6.3.1 running Node.js 20'
+          version-label: go-${{ github.sha }}
+          solution-stack-name: '64bit Amazon Linux 2023 v4.3.0 running Go 1'
           deployment-package-path: app.zip
           option-settings: |
             [
@@ -50,5 +59,10 @@ jobs:
                 "Namespace": "aws:elasticbeanstalk:environment",
                 "OptionName": "ServiceRole",
                 "Value": "aws-elasticbeanstalk-service-role"
+              },
+              {
+                "Namespace": "aws:ec2:instances",
+                "OptionName": "InstanceTypes",
+                "Value": "t3.small"
               }
             ]

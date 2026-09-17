@@ -1,12 +1,9 @@
 import * as core from '@actions/core';
-import {
-  DescribeEnvironmentsCommand,
-  DescribeEventsCommand,
-} from '@aws-sdk/client-elastic-beanstalk';
 import { AWSClients } from './aws-clients';
+import { describeEnvironment, describeEvents, EventSnapshot, isNonRetryableError } from './aws-operations';
 
 /**
- * Fetch recent environment events for debugging and check for fatal/error events
+ * Fetch recent environment events for debugging and check for fatal/error events.
  */
 async function describeRecentEvents(
   clients: AWSClients,
@@ -16,80 +13,57 @@ async function describeRecentEvents(
   deploymentStartTime?: Date
 ): Promise<{ hasError: boolean; errorMessage?: string; lastEventDate?: Date }> {
   try {
-    const command = new DescribeEventsCommand({
-      ApplicationName: applicationName,
-      EnvironmentName: environmentName,
-      MaxRecords: 10,
+    const events: EventSnapshot[] = await describeEvents(clients, applicationName, environmentName);
+
+    const newEvents = events.filter((event) => {
+      const eventDate = event.date;
+      if (!eventDate) return false;
+      if (deploymentStartTime && eventDate <= deploymentStartTime) return false;
+      if (lastSeenEventDate && eventDate <= lastSeenEventDate) return false;
+      return true;
     });
 
-    const response = await clients.getElasticBeanstalkClient().send(command);
+    if (newEvents.length === 0) {
+      return { hasError: false, lastEventDate: lastSeenEventDate };
+    }
 
-    if (response.Events && response.Events.length > 0) {
-      const newEvents = response.Events.filter((event) => {
-        const eventDate = event.EventDate;
-        if (!eventDate) return false;
+    // Only show header on first call
+    if (!lastSeenEventDate) {
+      core.info('📋 Recent events:');
+    }
 
-        // Must be after deployment start time
-        if (deploymentStartTime && eventDate <= deploymentStartTime) {
-          return false;
-        }
+    // Sort events by timestamp in ascending order (oldest first)
+    const sortedEvents = [...newEvents].sort((a, b) => (a.date?.getTime() || 0) - (b.date?.getTime() || 0));
 
-        // Must be after last seen event date
-        if (lastSeenEventDate && eventDate <= lastSeenEventDate) {
-          return false;
-        }
+    const fatalOrErrorEvents: Array<{ message: string }> = [];
+    let mostRecentDate: Date | undefined;
 
-        return true;
-      });
-
-      if (newEvents.length > 0) {
-        // Only show header on first call
-        if (!lastSeenEventDate) {
-          core.info('📋 Recent events:');
-        }
-        
-        // Sort events by timestamp in ascending order (oldest first)
-        const sortedEvents = [...newEvents].sort((a, b) => {
-          const dateA = a.EventDate?.getTime() || 0;
-          const dateB = b.EventDate?.getTime() || 0;
-          return dateA - dateB;
-        });
-        
-        const fatalOrErrorEvents: Array<{ message: string }> = [];
-        let mostRecentDate: Date | undefined;
-        
-        sortedEvents.forEach((event) => {
-          const eventDate = event.EventDate;
-          if (eventDate) {
-            // Track the most recent event date
-            if (!mostRecentDate || eventDate > mostRecentDate) {
-              mostRecentDate = eventDate;
-            }
-          }
-          
-          const timestamp = eventDate?.toISOString() || 'Unknown time';
-          const severity = event.Severity || 'INFO';
-          const message = event.Message || 'No message';
-
-          if (severity === 'ERROR' || severity === 'FATAL') {
-            core.error(`  [${timestamp}] ${severity}: ${message}`);
-            fatalOrErrorEvents.push({ message });
-          } else if (severity === 'WARN') {
-            core.warning(`  [${timestamp}] ${severity}: ${message}`);
-          } else {
-            core.info(`  [${timestamp}] ${severity}: ${message}`);
-          }
-        });
-
-        if (fatalOrErrorEvents.length > 0) {
-          const errorMessage = fatalOrErrorEvents[0].message || 'Unknown error occurred';
-          return { hasError: true, errorMessage, lastEventDate: mostRecentDate };
-        }
-        
-        return { hasError: false, lastEventDate: mostRecentDate };
+    sortedEvents.forEach((event) => {
+      const eventDate = event.date;
+      if (eventDate && (!mostRecentDate || eventDate > mostRecentDate)) {
+        mostRecentDate = eventDate;
       }
-    }    
-    return { hasError: false, lastEventDate: lastSeenEventDate };
+
+      const timestamp = eventDate?.toISOString() || 'Unknown time';
+      const severity = event.severity || 'INFO';
+      const message = event.message || 'No message';
+
+      if (severity === 'ERROR' || severity === 'FATAL') {
+        core.error(`  [${timestamp}] ${severity}: ${message}`);
+        fatalOrErrorEvents.push({ message });
+      } else if (severity === 'WARN') {
+        core.warning(`  [${timestamp}] ${severity}: ${message}`);
+      } else {
+        core.info(`  [${timestamp}] ${severity}: ${message}`);
+      }
+    });
+
+    if (fatalOrErrorEvents.length > 0) {
+      const errorMessage = fatalOrErrorEvents[0].message || 'Unknown error occurred';
+      return { hasError: true, errorMessage, lastEventDate: mostRecentDate };
+    }
+
+    return { hasError: false, lastEventDate: mostRecentDate };
   } catch (error) {
     // If we can't fetch events, just log and continue
     core.debug(`Failed to fetch events: ${error}`);
@@ -98,8 +72,8 @@ async function describeRecentEvents(
 }
 
 /**
- * Wait for deployment to complete
- * Returns the last seen event date to avoid duplicate events in subsequent monitoring
+ * Wait for deployment to complete.
+ * Returns the last seen event date to avoid duplicate events in subsequent monitoring.
  */
 export async function waitForDeploymentCompletion(
   clients: AWSClients,
@@ -126,74 +100,40 @@ export async function waitForDeploymentCompletion(
   const pollInterval = deploymentActionType === 'create' ? 20000 : 10000;
 
   while (Date.now() - startTime < maxWait) {
-    const command = new DescribeEnvironmentsCommand({
-      ApplicationName: applicationName,
-      EnvironmentNames: [environmentName],
-    });
+    const env = await describeEnvironment(clients, applicationName, environmentName);
 
-    const response = await clients.getElasticBeanstalkClient().send(command);
+    if (env) {
+      const status = env.status;
 
-    if (response.Environments && response.Environments.length > 0) {
-      const env = response.Environments[0];
-      const status = env.Status;
-      const versionMismatch =
-        expectedVersionLabel !== undefined && env.VersionLabel !== expectedVersionLabel;
+      // Always check for fatal/error events first — a launch failure can flip status to
+      // Ready in the same poll cycle it errors (EB surfaces the failure via events/health,
+      // not a distinct terminal status), so the Ready branch must not short-circuit past it.
+      const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+      lastSeenEventDate = eventCheck.lastEventDate;
 
-      if (status === 'Ready' && !versionMismatch) {
-        // Fetch and display final events before completing
-        const finalEvents = await describeRecentEvents(
-          clients,
-          applicationName,
-          environmentName,
-          lastSeenEventDate,
-          deploymentStartTime
-        );
-
-        if (finalEvents.hasError) {
-          throw new Error(
-            `Environment deployment failed - fatal or error event detected: ${finalEvents.errorMessage}`
-          );
-        }
-
-        core.info('✅ Deployment complete');
-        return finalEvents.lastEventDate || lastSeenEventDate;
+      if (eventCheck.hasError) {
+        throw new Error(`Environment deployment failed - fatal or error event detected: ${eventCheck.errorMessage}`);
       }
 
+      const versionMismatch = expectedVersionLabel !== undefined && env.versionLabel !== expectedVersionLabel;
+
+      if (status === 'Ready' && !versionMismatch) {
+        core.info('✅ Deployment complete');
+        return lastSeenEventDate;
+      }
+
+      // A failed update emits its ERROR events and then returns the environment to Ready on the
+      // previous version, so status and health look healthy for a deployment that never landed.
       if (status === 'Ready' && versionMismatch) {
         readyOnUnexpectedVersionSince ??= Date.now();
         if (Date.now() - readyOnUnexpectedVersionSince >= rollbackConfirmationMs) {
-          // Fetch and display final events before failing
-          await describeRecentEvents(
-            clients,
-            applicationName,
-            environmentName,
-            lastSeenEventDate,
-            deploymentStartTime
-          );
           throw new Error(
-            `Environment deployment failed - environment is running version ${env.VersionLabel ?? 'unknown'} ` +
+            `Environment deployment failed - environment is running version ${env.versionLabel ?? 'unknown'} ` +
             `instead of the requested ${expectedVersionLabel}, the update was most likely rolled back`
           );
         }
       } else {
         readyOnUnexpectedVersionSince = undefined;
-      }
-
-      // Check for fatal/error events during deployment
-      const eventCheck = await describeRecentEvents(
-        clients,
-        applicationName,
-        environmentName,
-        lastSeenEventDate,
-        deploymentStartTime
-      );
-
-      lastSeenEventDate = eventCheck.lastEventDate;
-
-      if (eventCheck.hasError) {
-        throw new Error(
-          `Environment deployment failed - fatal or error event detected: ${eventCheck.errorMessage}`
-        );
       }
 
       // Only log when status changes
@@ -212,7 +152,7 @@ export async function waitForDeploymentCompletion(
 }
 
 /**
- * Wait for environment health to recover
+ * Wait for environment health to recover.
  */
 export async function waitForHealthRecovery(
   clients: AWSClients,
@@ -231,17 +171,11 @@ export async function waitForHealthRecovery(
   let lastSeenEventDate: Date | undefined = lastEventDateFromDeployment;
 
   while (Date.now() - startTime < maxWait) {
-    const command = new DescribeEnvironmentsCommand({
-      ApplicationName: applicationName,
-      EnvironmentNames: [environmentName],
-    });
+    const env = await describeEnvironment(clients, applicationName, environmentName);
 
-    const response = await clients.getElasticBeanstalkClient().send(command);
-
-    if (response.Environments && response.Environments.length > 0) {
-      const env = response.Environments[0];
-      const health = env.Health;
-      const status = env.Status;
+    if (env) {
+      const health = env.health;
+      const status = env.status;
 
       if (health === 'Green' || health === 'Yellow') {
         core.info('✅ Environment is healthy!');
@@ -249,22 +183,14 @@ export async function waitForHealthRecovery(
       }
 
       if (health === 'Grey' || health === undefined || health === 'Red') {
-        const eventCheck = await describeRecentEvents(
-          clients,
-          applicationName,
-          environmentName,
-          lastSeenEventDate,
-          deploymentStartTime
-        );
+        const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
 
         if (eventCheck.lastEventDate) {
           lastSeenEventDate = eventCheck.lastEventDate;
         }
 
         if (eventCheck.hasError) {
-          throw new Error(
-            `Environment health recovery failed - fatal or error event detected: ${eventCheck.errorMessage}`
-          );
+          throw new Error(`Environment health recovery failed - fatal or error event detected: ${eventCheck.errorMessage}`);
         }
 
         if (health === 'Red' && status === 'Ready') {
@@ -284,4 +210,79 @@ export async function waitForHealthRecovery(
   // Timeout occurred - fetch events to help diagnose
   await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
   throw new Error(`Environment health recovery timed out after ${timeout}s`);
+}
+
+/**
+ * Wait for an existing environment to leave a transitional status (Updating/Launching) before
+ * deploying to it. UpdateEnvironment on a non-Ready environment fails immediately with
+ * "invalid state for this operation. Must be Ready", so a run that starts while a previous one is
+ * still deploying (e.g. two pushes in quick succession) would otherwise fail after a few retries.
+ * The status is read fresh here rather than reusing the pre-packaging check: packaging, upload,
+ * or an image build may have taken long enough for another deployment to start in between.
+ */
+export async function waitForEnvironmentReady(
+  clients: AWSClients,
+  applicationName: string,
+  environmentName: string,
+  timeout: number
+): Promise<void> {
+  const startTime = Date.now();
+  const maxWait = timeout * 1000;
+  const pollInterval = 10000;
+  let waited = false;
+
+  while (true) {
+    let env;
+    let status: string | undefined;
+    try {
+      env = await describeEnvironment(clients, applicationName, environmentName);
+      status = env?.status;
+      if (status === 'Ready') {
+        if (waited) core.info('✅ Environment is Ready');
+        return;
+      }
+      if (status === 'Terminating' || status === 'Terminated' || !env) {
+        throw new Error(`Environment ${environmentName} is ${status ?? 'gone'} and cannot be deployed to`);
+      }
+    } catch (error) {
+      // The poll loop is the retry for transient describe failures (throttling, 5xx); permanent
+      // ones (lost permissions, expired credentials) and the terminal-state error above propagate.
+      if (env !== undefined || isNonRetryableError(error)) throw error;
+      core.warning(`Could not read environment status (will retry): ${(error as Error).message}`);
+      status = undefined;
+    }
+    const remainingMs = maxWait - (Date.now() - startTime);
+    if (remainingMs <= 0) break;
+    if (!waited) {
+      core.info(`⏳ Environment ${environmentName} is ${status ?? 'in an unknown state'}; waiting for it to become Ready...`);
+      waited = true;
+    } else {
+      core.info(`Current status: ${status}`);
+    }
+    await new Promise(resolve => setTimeout(resolve, Math.min(pollInterval, remainingMs)));
+  }
+
+  throw new Error(`Environment ${environmentName} did not become Ready within ${timeout}s`);
+}
+
+/**
+ * Get environment information for outputs.
+ */
+export async function getEnvironmentInfo(
+  clients: AWSClients,
+  applicationName: string,
+  environmentName: string
+): Promise<{ url: string; id: string; status: string; health: string }> {
+  const env = await describeEnvironment(clients, applicationName, environmentName);
+
+  if (!env) {
+    throw new Error(`Environment ${environmentName} not found after deployment`);
+  }
+
+  return {
+    url: env.cname || '',
+    id: env.environmentId || '',
+    status: env.status || '',
+    health: env.health || '',
+  };
 }

@@ -6,7 +6,9 @@ import {
   CreateEnvironmentCommand,
   CreateEnvironmentCommandInput,
   DescribeEnvironmentsCommand,
+  DescribeEventsCommand,
   DescribeApplicationVersionsCommand,
+  ImageBuildConfiguration,
 } from '@aws-sdk/client-elastic-beanstalk';
 import { PutObjectCommand, HeadBucketCommand, CreateBucketCommand } from '@aws-sdk/client-s3';
 import { GetCallerIdentityCommand } from '@aws-sdk/client-sts';
@@ -20,6 +22,41 @@ import { parseJsonInput } from './validations';
  * AWS Elastic Beanstalk limit: https://docs.aws.amazon.com/elasticbeanstalk/latest/dg/applications-sourcebundle.html
  */
 export const MAX_DEPLOYMENT_PACKAGE_SIZE_BYTES = 500 * 1024 * 1024;
+
+/**
+ * Every field of the SDK's ImageConfiguration.Build model. Typed as a complete Record so that a
+ * future SDK bump that adds a field fails to compile until it is listed here, keeping the
+ * unknown-field warning in sync with what the SDK serializer actually sends.
+ */
+const IMAGE_BUILD_CONFIGURATION_FIELDS: Record<keyof ImageBuildConfiguration, true> = {
+  Type: true,
+  DockerfileLocation: true,
+  Buildpack: true,
+  Architecture: true,
+  CodeBuildServiceRole: true,
+  ComputeType: true,
+  TimeoutInMinutes: true,
+};
+
+/**
+ * Keys of a user-supplied build-configuration object that the SDK does not model and therefore
+ * silently drops from the CreateApplicationVersion request.
+ */
+export function unknownImageBuildConfigurationFields(config: object): string[] {
+  return Object.keys(config).filter((key) => !Object.prototype.hasOwnProperty.call(IMAGE_BUILD_CONFIGURATION_FIELDS, key));
+}
+
+/** Service default for ImageConfiguration.Build.TimeoutInMinutes when the caller doesn't set one. */
+export const DEFAULT_IMAGE_BUILD_TIMEOUT_MINUTES = 60;
+
+/** IAM role ARN in any partition (aws, aws-cn, aws-us-gov, ...), with an optional path. */
+export const IAM_ROLE_ARN_PATTERN = /^arn:aws[a-z-]*:iam::\d{12}:role\/[\w+=,.@/-]+$/;
+
+export interface OptionSettingInput {
+  Namespace?: string;
+  OptionName?: string;
+  Value?: string;
+}
 
 /**
  * Validate that option-settings contains required IAM roles when creating an environment
@@ -52,6 +89,52 @@ export function validateOptionSettingsForCreate(optionSettingsJson: string | und
 
   if (!hasServiceRole) {
     throw new Error('option-settings must include ServiceRole setting with Namespace "aws:elasticbeanstalk:environment" and OptionName "ServiceRole"');
+  }
+}
+
+/**
+ * Validate that option-settings contains the settings the Beanstalk Cluster service itself requires
+ * the customer to provide on CreateEnvironment (required=true with no default and no
+ * server-side override in the service's option definitions): cluster-role, node-role, and
+ * observability-role. Other required-flagged settings are satisfied without customer input
+ * (operation-role is overridden server-side; service-port has a default), and
+ * application-role is optional - so none of those are validated here.
+ */
+export function validateOptionSettingsForCreateClusterMode(optionSettingsJson: string | undefined): void {
+  if (!optionSettingsJson) {
+    throw new Error(
+      'option-settings is required when creating a new Beanstalk Cluster environment. ' +
+      'Must include cluster-role, node-role (Namespace "aws:elasticbeanstalk:eks") and ' +
+      'observability-role (Namespace "aws:elasticbeanstalk:eks:environment").'
+    );
+  }
+
+  const parsedSettings = JSON.parse(optionSettingsJson);
+
+  const requiredSettings: Array<{ namespace: string; optionName: string }> = [
+    { namespace: 'aws:elasticbeanstalk:eks', optionName: 'cluster-role' },
+    { namespace: 'aws:elasticbeanstalk:eks', optionName: 'node-role' },
+    { namespace: 'aws:elasticbeanstalk:eks:environment', optionName: 'observability-role' },
+  ];
+
+  for (const required of requiredSettings) {
+    const found = parsedSettings.find(
+      (setting: OptionSettingInput) => setting.Namespace === required.namespace && setting.OptionName === required.optionName
+    );
+    if (!found) {
+      throw new Error(
+        `option-settings must include ${required.optionName} setting with Namespace "${required.namespace}" and OptionName "${required.optionName}"`
+      );
+    }
+    // These settings take IAM role ARNs. A missing or malformed value passes CreateEnvironment
+    // input validation but fails later during provisioning — catch it here where the message can
+    // name the setting.
+    if (!IAM_ROLE_ARN_PATTERN.test(found.Value?.trim() ?? '')) {
+      throw new Error(
+        `option-settings entry ${required.optionName} (Namespace "${required.namespace}") must be an IAM role ARN ` +
+        `(arn:aws:iam::123456789012:role/...), got: ${JSON.stringify(found.Value ?? '')}`
+      );
+    }
   }
 }
 
@@ -89,6 +172,44 @@ export const AWS_S3_REGIONS = [
 export type AWSS3Region = typeof AWS_S3_REGIONS[number];
 
 /**
+ * Errors that retrying cannot fix: authorization/permission failures, expired or invalid
+ * credentials, and deterministic Elastic Beanstalk rejections. Shared by retryWithBackoff and the
+ * long-running pollers, which otherwise would keep retrying a permanent failure until their deadline.
+ */
+export function isNonRetryableError(error: unknown): boolean {
+  const err = error as Error & { name?: string };
+  const message = err?.message || '';
+
+  const isAuthError =
+    /accessdenied|access denied|not authorized|unauthorizedoperation|you do not have permission/i.test(message) ||
+    err?.name === 'AccessDeniedException' ||
+    err?.name === 'UnauthorizedOperation';
+
+  // Expired/invalid credentials (e.g. an OIDC session that ended during a long image build).
+  const isCredentialError =
+    err?.name === 'ExpiredToken' ||
+    err?.name === 'ExpiredTokenException' ||
+    err?.name === 'InvalidClientTokenId' ||
+    err?.name === 'UnrecognizedClientException' ||
+    err?.name === 'CredentialsProviderError' ||
+    /security token .* (expired|invalid)|expired token|could not load credentials/i.test(message);
+
+  // EB application version already exists under this label.
+  const isAppVersionExistsError =
+    /application version .* already exists/i.test(message) ||
+    (err?.name === 'InvalidParameterValueException' && /already exists/i.test(message));
+
+  // The version under this label can't be deployed to the target environment (e.g. a source
+  // bundle or a FAILED build reused on a Beanstalk Cluster environment). The service message is
+  // "Application version 'X' does not exist or is not compatible with Kubernetes-based environments ...".
+  const isIncompatibleVersionError =
+    err?.name === 'InvalidParameterValueException' &&
+    /does not exist or is not compatible with .* environments/i.test(message);
+
+  return err?.name === 'BucketCheckResult' || isAuthError || isCredentialError || isAppVersionExistsError || isIncompatibleVersionError;
+}
+
+/**
  * Retry a function with exponential backoff
  */
 export async function retryWithBackoff<T>(
@@ -105,21 +226,9 @@ export async function retryWithBackoff<T>(
     try {
       return await fn();
     } catch (error) {
-      const err = error as Error & { name?: string; $metadata?: { httpStatusCode?: number } };
-      const message = err.message || '';
+      const err = error as Error;
 
-      // non-retryable authorization/permission errors - fail fast
-      const isAuthError =
-        /accessdenied|access denied|not authorized|unauthorizedoperation|you do not have permission/i.test(message) ||
-        err.name === 'AccessDeniedException' ||
-        err.name === 'UnauthorizedOperation';
-
-      // non-retryable EB application version already-exists errors - fail fast
-      const isAppVersionExistsError =
-        /application version .* already exists/i.test(message) ||
-        (err.name === 'InvalidParameterValueException' && /already exists/i.test(message));
-
-      if (isAuthError || isAppVersionExistsError) {
+      if (isNonRetryableError(err)) {
         throw err;
       }
 
@@ -168,17 +277,80 @@ export async function applicationVersionExists(
   versionLabel: string
 ): Promise<boolean> {
   try {
-    const command = new DescribeApplicationVersionsCommand({
-      ApplicationName: applicationName,
-      VersionLabels: [versionLabel],
-    });
-
-    const response = await clients.getElasticBeanstalkClient().send(command);
-    return (response.ApplicationVersions?.length ?? 0) > 0;
+    return (await getApplicationVersionInfo(clients, applicationName, versionLabel)).exists;
   } catch (error) {
     core.debug(`Error checking application version ${versionLabel} existence: ${error}`);
     return false;
   }
+}
+
+/**
+ * Get the processing status of an application version (UNPROCESSED, BUILDING while an image builds, PROCESSED, FAILED).
+ * Used to poll a Beanstalk Cluster image build to completion.
+ */
+export async function getApplicationVersionStatus(
+  clients: AWSClients,
+  applicationName: string,
+  versionLabel: string,
+  maxRetries = 0,
+  retryDelay = 1
+): Promise<string | undefined> {
+  return (await getApplicationVersionInfo(clients, applicationName, versionLabel, maxRetries, retryDelay)).status;
+}
+
+/**
+ * Describe an application version: the single DescribeApplicationVersions call behind
+ * applicationVersionExists and getApplicationVersionStatus.
+ */
+export async function getApplicationVersionInfo(
+  clients: AWSClients,
+  applicationName: string,
+  versionLabel: string,
+  maxRetries = 0,
+  retryDelay = 1
+): Promise<{ exists: boolean; status?: string; buildTimeoutMinutes?: number }> {
+  const command = new DescribeApplicationVersionsCommand({
+    ApplicationName: applicationName,
+    VersionLabels: [versionLabel],
+  });
+
+  const response = await retryWithBackoff(
+    () => clients.getElasticBeanstalkClient().send(command),
+    maxRetries,
+    retryDelay,
+    'Describe application version'
+  );
+  const version = response.ApplicationVersions?.[0];
+  return {
+    exists: !!version,
+    status: version?.Status,
+    // Present on versions the service builds from source; lets a reused in-progress build be
+    // waited on for its own timeout rather than the current run's build-configuration.
+    buildTimeoutMinutes: version?.ImageBuildConfiguration?.TimeoutInMinutes,
+  };
+}
+
+/**
+ * Container image recorded on a Beanstalk Cluster application version (ImageSource.Uri),
+ * or undefined when the version has none.
+ */
+export async function getApplicationVersionImageUri(
+  clients: AWSClients,
+  applicationName: string,
+  versionLabel: string,
+  maxRetries: number,
+  retryDelay: number
+): Promise<string | undefined> {
+  const response = await retryWithBackoff(
+    () => clients.getElasticBeanstalkClient().send(new DescribeApplicationVersionsCommand({
+      ApplicationName: applicationName,
+      VersionLabels: [versionLabel],
+    })),
+    maxRetries,
+    retryDelay,
+    'Describe application version'
+  );
+  return response.ApplicationVersions?.[0]?.ImageSource?.Uri || undefined;
 }
 
 /**
@@ -225,7 +397,7 @@ export async function environmentExists(
   clients: AWSClients,
   applicationName: string,
   environmentName: string
-): Promise<{ exists: boolean; status?: string; health?: string }> {
+): Promise<{ exists: boolean; status?: string; health?: string; tierName?: string }> {
   try {
     const command = new DescribeEnvironmentsCommand({
       ApplicationName: applicationName,
@@ -238,10 +410,11 @@ export async function environmentExists(
       const env = response.Environments[0];
       const status = env.Status;
       const health = env.Health;
+      const tierName = env.Tier?.Name;
       core.info(`Environment ${environmentName} found - Status: ${status}, Health: ${health}`);
 
       const exists = status !== 'Terminated';
-      return { exists, status, health };
+      return { exists, status, health, tierName };
     }
 
     core.info(`No environments found with name ${environmentName}`);
@@ -326,7 +499,18 @@ export async function uploadToS3(
 }
 
 /**
- * Create S3 bucket exists if not exists
+ * Definitive HeadBucket outcome (403 owned by another account, 404 missing, or an unclassifiable
+ * error) carried out of retryWithBackoff without being retried.
+ */
+class BucketCheckResult extends Error {
+  constructor(public readonly cause: Error, public readonly statusCode: number | undefined) {
+    super(cause.message);
+    this.name = 'BucketCheckResult';
+  }
+}
+
+/**
+ * Create S3 bucket if it does not exist
  */
 export async function createS3Bucket(
   clients: AWSClients,
@@ -342,21 +526,42 @@ export async function createS3Bucket(
     // - 200: bucket exists and is owned by this account
     // - 403: bucket exists but is owned by a different account
     // - 404: bucket does not exist
-    await clients.getS3Client().send(new HeadBucketCommand({
-      Bucket: bucket,
-      ExpectedBucketOwner: accountId,
-    }));
+    // 403 and 404 are definitive answers, so only other failures (5xx, throttling, network) are
+    // retried; they must not fall through to CreateBucket, which would fail with a confusing error.
+    await retryWithBackoff(
+      async () => {
+        try {
+          await clients.getS3Client().send(new HeadBucketCommand({
+            Bucket: bucket,
+            ExpectedBucketOwner: accountId,
+          }));
+        } catch (error) {
+          const statusCode = (error as Error & { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+          if (statusCode === 403 || statusCode === 404 || statusCode === undefined) {
+            throw new BucketCheckResult(error as Error, statusCode);
+          }
+          throw error;
+        }
+      },
+      maxRetries,
+      retryDelay,
+      'Check S3 bucket'
+    );
     core.info('✅ S3 bucket exists');
   } catch (error) {
-    const err = error as Error & { $metadata?: { httpStatusCode?: number } };
+    if (!(error instanceof BucketCheckResult)) {
+      throw error;
+    }
+    const statusCode = error.statusCode;
 
-    if (err.$metadata?.httpStatusCode === 403) {
+    if (statusCode === 403) {
       throw new Error(
         `S3 bucket '${bucket}' exists but is not owned by this AWS account (${accountId}). ` +
         'Specify a different bucket name using the s3-bucket-name input.'
       );
     }
 
+    // 404, or no status code at all (can't positively identify the error): attempt the create as before.
     core.info('🪣 S3 bucket does not exist, creating S3 bucket');
 
     await retryWithBackoff(
@@ -382,17 +587,23 @@ export async function createS3Bucket(
 }
 
 /**
- * Create an application version
+ * Create an application version via the SDK.
+ *
+ * Beanstalk Standard versions carry a SourceBundle. Beanstalk Cluster versions carry an
+ * ImageConfiguration: Source (a prebuilt image) or Build (built from the SourceBundle by the
+ * service; Process=true starts the build).
  */
 export async function createApplicationVersion(
   clients: AWSClients,
   applicationName: string,
   versionLabel: string,
-  s3Bucket: string,
-  s3Key: string,
+  s3Bucket: string | undefined,
+  s3Key: string | undefined,
   maxRetries: number,
   retryDelay: number,
-  autoCreateApplication: boolean
+  autoCreateApplication: boolean,
+  imageUri?: string,
+  buildConfiguration?: ImageBuildConfiguration
 ): Promise<void> {
   core.info(`📝 Creating application version: ${versionLabel}`);
 
@@ -401,10 +612,9 @@ export async function createApplicationVersion(
       const command = new CreateApplicationVersionCommand({
         ApplicationName: applicationName,
         VersionLabel: versionLabel,
-        SourceBundle: {
-          S3Bucket: s3Bucket,
-          S3Key: s3Key,
-        },
+        ...(s3Bucket && s3Key ? { SourceBundle: { S3Bucket: s3Bucket, S3Key: s3Key } } : {}),
+        ...(imageUri ? { ImageConfiguration: { Source: { Uri: imageUri } } } : {}),
+        ...(buildConfiguration ? { ImageConfiguration: { Build: buildConfiguration }, Process: true } : {}),
         Description: `Deployed from GitHub Actions - ${process.env.GITHUB_SHA || 'manual'}`,
         AutoCreateApplication: autoCreateApplication,
       });
@@ -435,14 +645,10 @@ export async function updateEnvironment(
 ): Promise<void> {
   core.info(`🔄 Updating environment: ${environmentName}`);
 
-  let parsedOptionSettings: Array<{
-    Namespace?: string;
-    OptionName?: string;
-    Value?: string;
-  }> | undefined = undefined;
+  let parsedOptionSettings: OptionSettingInput[] | undefined = undefined;
   if (optionSettings) {
     try {
-      const customSettings = parseJsonInput(optionSettings, 'option-settings');
+      const customSettings = parseJsonInput<OptionSettingInput[]>(optionSettings, 'option-settings');
       if (Array.isArray(customSettings)) {
         parsedOptionSettings = customSettings;
       }
@@ -480,7 +686,8 @@ export async function updateEnvironment(
 }
 
 /**
- * Create a new environment
+ * Create a new environment. In Beanstalk Cluster mode the environment is created with
+ * Tier={Name: Cluster, Type: EKS} instead of a solution stack or platform ARN.
  */
 export async function createEnvironment(
   clients: AWSClients,
@@ -492,11 +699,12 @@ export async function createEnvironment(
   platformArn: string | undefined,
   cnamePrefix: string | undefined,
   maxRetries: number,
-  retryDelay: number
+  retryDelay: number,
+  isClusterMode = false
 ): Promise<void> {
   core.info(`🆕 Creating new environment: ${environmentName}`);
 
-  const optionSettings = parseJsonInput(optionSettingsJson, 'option-settings');
+  const optionSettings = parseJsonInput<OptionSettingInput[]>(optionSettingsJson, 'option-settings');
 
   await retryWithBackoff(
     async () => {
@@ -506,11 +714,13 @@ export async function createEnvironment(
         VersionLabel: versionLabel,
         OptionSettings: optionSettings,
         ...(cnamePrefix ? { CNAMEPrefix: cnamePrefix } : {}),
-        ...(solutionStackName
-          ? { SolutionStackName: solutionStackName }
-          : platformArn
-            ? { PlatformArn: platformArn }
-            : {}),
+        ...(isClusterMode
+          ? { Tier: { Name: 'Cluster', Type: 'EKS' } }
+          : (solutionStackName
+              ? { SolutionStackName: solutionStackName }
+              : platformArn
+                ? { PlatformArn: platformArn }
+                : {})),
       };
 
       const command = new CreateEnvironmentCommand(commandParams);
@@ -525,31 +735,52 @@ export async function createEnvironment(
   core.info(`✅ Environment creation initiated for ${environmentName}`);
 }
 
+export interface EnvironmentSnapshot {
+  status?: string;
+  health?: string;
+  cname?: string;
+  environmentId?: string;
+  versionLabel?: string;
+}
+
+export interface EventSnapshot {
+  severity?: string;
+  message?: string;
+  date?: Date;
+}
+
 /**
- * Get environment information
+ * Describe an environment's current status/health for polling (used by monitoring.ts for both tiers).
  */
-export async function getEnvironmentInfo(
+export async function describeEnvironment(
   clients: AWSClients,
   applicationName: string,
   environmentName: string
-): Promise<{ url: string; id: string; status: string; health: string }> {
+): Promise<EnvironmentSnapshot | null> {
   const command = new DescribeEnvironmentsCommand({
     ApplicationName: applicationName,
     EnvironmentNames: [environmentName],
   });
-
   const response = await clients.getElasticBeanstalkClient().send(command);
+  const env = response.Environments?.[0];
+  return env
+    ? { status: env.Status, health: env.Health, cname: env.CNAME, environmentId: env.EnvironmentId, versionLabel: env.VersionLabel }
+    : null;
+}
 
-  if (!response.Environments || response.Environments.length === 0) {
-    throw new Error(`Environment ${environmentName} not found after deployment`);
-  }
-
-  const env = response.Environments[0];
-
-  return {
-    url: env.CNAME || '',
-    id: env.EnvironmentId || '',
-    status: env.Status || '',
-    health: env.Health || '',
-  };
+/**
+ * Describe an environment's recent events for polling (used by monitoring.ts for both tiers).
+ */
+export async function describeEvents(
+  clients: AWSClients,
+  applicationName: string,
+  environmentName: string
+): Promise<EventSnapshot[]> {
+  const command = new DescribeEventsCommand({
+    ApplicationName: applicationName,
+    EnvironmentName: environmentName,
+    MaxRecords: 10,
+  });
+  const response = await clients.getElasticBeanstalkClient().send(command);
+  return (response.Events || []).map(e => ({ severity: e.Severity, message: e.Message, date: e.EventDate }));
 }
