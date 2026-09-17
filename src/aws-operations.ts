@@ -59,6 +59,19 @@ export interface OptionSettingInput {
 }
 
 /**
+ * Parse the option-settings input, requiring a JSON array. Shared by both create-time validators
+ * so malformed input gets the same "Invalid JSON in option-settings input" wording as the rest of
+ * the action, and a JSON object fails with a clear message instead of a bare TypeError.
+ */
+function parseOptionSettingsArray(optionSettingsJson: string): OptionSettingInput[] {
+  const parsed = parseJsonInput<unknown>(optionSettingsJson, 'option-settings');
+  if (!Array.isArray(parsed)) {
+    throw new Error('option-settings must be a JSON array of {"Namespace", "OptionName", "Value"} objects');
+  }
+  return parsed as OptionSettingInput[];
+}
+
+/**
  * Validate that option-settings contains required IAM roles when creating an environment
  */
 export function validateOptionSettingsForCreate(optionSettingsJson: string | undefined): void {
@@ -66,7 +79,7 @@ export function validateOptionSettingsForCreate(optionSettingsJson: string | und
     throw new Error('option-settings is required when creating a new environment. Must include IamInstanceProfile and ServiceRole.');
   }
 
-  const parsedSettings = JSON.parse(optionSettingsJson);
+  const parsedSettings = parseOptionSettingsArray(optionSettingsJson);
 
   let hasIamInstanceProfile = false;
   let hasServiceRole = false;
@@ -109,7 +122,7 @@ export function validateOptionSettingsForCreateClusterMode(optionSettingsJson: s
     );
   }
 
-  const parsedSettings = JSON.parse(optionSettingsJson);
+  const parsedSettings = parseOptionSettingsArray(optionSettingsJson);
 
   const requiredSettings: Array<{ namespace: string; optionName: string }> = [
     { namespace: 'aws:elasticbeanstalk:eks', optionName: 'cluster-role' },
@@ -499,11 +512,11 @@ export async function uploadToS3(
 }
 
 /**
- * Definitive HeadBucket outcome (403 owned by another account, 404 missing, or an unclassifiable
- * error) carried out of retryWithBackoff without being retried.
+ * Definitive HeadBucket outcome (403 owned by another account, 404 missing) carried out of
+ * retryWithBackoff without being retried.
  */
 class BucketCheckResult extends Error {
-  constructor(public readonly cause: Error, public readonly statusCode: number | undefined) {
+  constructor(public readonly cause: Error, public readonly statusCode: number) {
     super(cause.message);
     this.name = 'BucketCheckResult';
   }
@@ -526,8 +539,9 @@ export async function createS3Bucket(
     // - 200: bucket exists and is owned by this account
     // - 403: bucket exists but is owned by a different account
     // - 404: bucket does not exist
-    // 403 and 404 are definitive answers, so only other failures (5xx, throttling, network) are
-    // retried; they must not fall through to CreateBucket, which would fail with a confusing error.
+    // 403 and 404 are definitive answers. Everything else (5xx, throttling, network errors and
+    // other failures with no HTTP status) is retried, and if it persists it surfaces as the
+    // failure it is rather than falling through to CreateBucket on a bucket that may exist.
     await retryWithBackoff(
       async () => {
         try {
@@ -537,7 +551,7 @@ export async function createS3Bucket(
           }));
         } catch (error) {
           const statusCode = (error as Error & { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
-          if (statusCode === 403 || statusCode === 404 || statusCode === undefined) {
+          if (statusCode === 403 || statusCode === 404) {
             throw new BucketCheckResult(error as Error, statusCode);
           }
           throw error;
@@ -561,7 +575,7 @@ export async function createS3Bucket(
       );
     }
 
-    // 404, or no status code at all (can't positively identify the error): attempt the create as before.
+    // 404: the bucket does not exist.
     core.info('🪣 S3 bucket does not exist, creating S3 bucket');
 
     await retryWithBackoff(

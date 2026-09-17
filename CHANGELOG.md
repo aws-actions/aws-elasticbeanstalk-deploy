@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 #### Features
 
-* Beanstalk Cluster (EKS tier) deployment support. Adds support for deploying to Elastic Beanstalk Cluster environments alongside the existing EC2 tier, with no changes to the classic flow.
+* Beanstalk Cluster (EKS tier) deployment support. Adds support for deploying to Elastic Beanstalk Cluster environments alongside the existing EC2 tier. The classic flow's API calls and request contents are unchanged; see Behavior changes below for the pre-deployment checks that now run in both modes.
   * New inputs: `image-uri` (deploy a prebuilt container image) and `build-configuration` (build the image from source with CodeBuild). Either implies a Cluster-tier environment; `deployment-timeout` defaults to 2400 seconds in that mode.
   * Tier mismatch between inputs and an existing environment fails fast, before packaging. A version that reports `PROCESSED` without a built image is rejected before deployment.
   * The action waits for an environment that is still updating to become `Ready` before deploying to it, and fails immediately when the target environment cannot run the selected version.
@@ -16,7 +16,8 @@ All notable changes to this project will be documented in this file. See [standa
 #### Behavior changes
 
 * `deployment-timeout` also bounds the new wait for an existing environment to become `Ready`, so the total maximum wait can be up to 3× the value (previously 2×).
-* The target environment is described before the source bundle is packaged (previously after). A tier mismatch or a `Terminating` environment fails the run before any packaging, upload, or version creation, and when `create-environment-if-not-exists` is `true` the create-time `option-settings`/platform checks run at that point too. A missing environment with `create-environment-if-not-exists` set to `false` still fails after the version is created, as before.
+* `build-configuration` fields that the bundled AWS SDK does not model fail the run before the version is created, since the SDK would otherwise drop them from the request.
+* The target environment is described before the source bundle is packaged (previously after). A tier mismatch or a `Terminating` environment fails the run before any packaging, upload, or version creation, and when `create-environment-if-not-exists` is `true` the create-time `option-settings`/platform checks run at that point too. A missing environment with `create-environment-if-not-exists` set to `false` now also fails at that point, before a version is created under the label (previously the version was created first).
 
 ### <a name="1.0.9" href="https://github.com/aws-actions/aws-elasticbeanstalk-deploy/tree/v1.0.9">1.0.9</a>
 

@@ -20,6 +20,15 @@ describe('validateOptionSettingsForCreate (classic EB)', () => {
     expect(() => validateOptionSettingsForCreate(undefined)).toThrow('option-settings is required when creating a new environment');
   });
 
+  it('throws the shared invalid-JSON message for malformed option-settings', () => {
+    expect(() => validateOptionSettingsForCreate('{not json')).toThrow('Invalid JSON in option-settings input');
+  });
+
+  it('throws a clear message when option-settings is a JSON object rather than an array', () => {
+    expect(() => validateOptionSettingsForCreate('{"Namespace":"aws:elasticbeanstalk:environment"}'))
+      .toThrow('option-settings must be a JSON array');
+  });
+
   it('throws when IamInstanceProfile is missing', () => {
     const settings = JSON.stringify([
       { Namespace: 'aws:elasticbeanstalk:environment', OptionName: 'ServiceRole', Value: 'role' },
@@ -104,6 +113,15 @@ describe('validateOptionSettingsForCreateClusterMode', () => {
       { Namespace: 'aws:elasticbeanstalk:eks:environment', OptionName: 'observability-role', Value: 'arn:aws:iam::123456789012:role/o' },
     ]);
     expect(() => validateOptionSettingsForCreateClusterMode(settings)).not.toThrow();
+  });
+
+  it('throws the shared invalid-JSON message for malformed option-settings', () => {
+    expect(() => validateOptionSettingsForCreateClusterMode('[{')).toThrow('Invalid JSON in option-settings input');
+  });
+
+  it('throws a clear message when option-settings is a JSON object rather than an array', () => {
+    expect(() => validateOptionSettingsForCreateClusterMode('{"Namespace":"aws:elasticbeanstalk:eks","OptionName":"cluster-role","Value":"arn:aws:iam::123456789012:role/c"}'))
+      .toThrow('option-settings must be a JSON array');
   });
 
   it('throws when cluster-role is missing', () => {

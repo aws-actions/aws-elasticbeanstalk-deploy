@@ -1009,30 +1009,24 @@ describe('Main Functions', () => {
       expect(mockedCore.setFailed).not.toHaveBeenCalled();
     });
 
-    it('should warn about build-configuration fields the SDK does not model and still send the modeled ones', async () => {
+    it('should fail before creating a version when build-configuration has fields the SDK does not model', async () => {
       const cfg = { Type: 'docker', CodeBuildServiceRole: 'arn:role', SomeFutureField: 'x', Nested: { a: 1 }, constructor: 'not-a-field' };
       useClusterInputs({ 'build-configuration': JSON.stringify(cfg) });
       mockSend
         .mockResolvedValueOnce({ Account: '123456789012' })
-        .mockResolvedValueOnce(clusterEnv)
-        .mockResolvedValueOnce({ ApplicationVersions: [] })
-        .mockResolvedValueOnce({}) // HeadBucket
-        .mockResolvedValueOnce({}) // PutObject
-        .mockResolvedValueOnce({}) // CreateApplicationVersion
-        .mockResolvedValueOnce({ ApplicationVersions: [{ VersionLabel: 'v1.0.0', Status: 'PROCESSED' }] }) // build poll
-        .mockResolvedValueOnce(versionWithImage) // image check
-        .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green', Tier: { Name: 'Cluster' } }] }) // DescribeEnvironments (fresh status before update)
-        .mockResolvedValueOnce({}) // UpdateEnvironment
-        .mockResolvedValueOnce(envInfo);
+        .mockResolvedValueOnce(clusterEnv);
 
       await run();
 
-      expect(mockedCore.warning).toHaveBeenCalledWith(expect.stringContaining('build-configuration field(s) SomeFutureField, Nested, constructor are not part of ImageConfiguration.Build'));
-      expect(createVersionInputs()[0]).toMatchObject({ ImageConfiguration: { Build: expect.objectContaining({ Type: 'docker', CodeBuildServiceRole: 'arn:role' }) } });
-      expect(mockedCore.setFailed).not.toHaveBeenCalled();
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('build-configuration field(s) SomeFutureField, Nested, constructor are not part of ImageConfiguration.Build'));
+      // Nothing packaged, uploaded, or created: the label is not consumed
+      const archiver = require('archiver');
+      expect(archiver).not.toHaveBeenCalled();
+      expect(createVersionInputs()).toHaveLength(0);
+      expect(mockSend).toHaveBeenCalledTimes(2);
     });
 
-    it('should not warn when build-configuration uses only modeled fields', async () => {
+    it('should accept a build-configuration that uses only modeled fields', async () => {
       useClusterInputs({ 'build-configuration': JSON.stringify({ Type: 'docker', CodeBuildServiceRole: 'arn:role', DockerfileLocation: 'app/Dockerfile', Architecture: 'arm64', ComputeType: 'BUILD_GENERAL1_SMALL', TimeoutInMinutes: 30, Buildpack: 'paketobuildpacks/builder-jammy-base' }) });
       mockSend
         .mockResolvedValueOnce({ Account: '123456789012' })
@@ -1049,8 +1043,8 @@ describe('Main Functions', () => {
 
       await run();
 
-      expect(mockedCore.warning).not.toHaveBeenCalledWith(expect.stringContaining('build-configuration field(s)'));
       expect(mockedCore.setFailed).not.toHaveBeenCalled();
+      expect(createVersionInputs()).toHaveLength(1);
     });
 
     it('should fail when a build reports PROCESSED but the version has no image (service dropped the build settings)', async () => {
@@ -1364,15 +1358,16 @@ describe('Main Functions', () => {
     it('should handle environment not exists without create flag', async () => {
       mockSend
         .mockResolvedValueOnce({ Account: '123456789012' }) // GetCallerIdentity
-        .mockResolvedValueOnce({ Environments: [] }) // DescribeEnvironments (no env found)
-        .mockResolvedValue({}); // HeadBucket / PutObject / CreateAppVersion
+        .mockResolvedValueOnce({ Environments: [] }); // DescribeEnvironments (no env found)
 
       await run();
 
       expect(mockedCore.setFailed).toHaveBeenCalledWith('Deployment failed: Environment test-env does not exist and create-environment-if-not-exists is false');
-      // Long-standing behavior: the application version is still created before the run fails
-      // (STS, DescribeEnvironments, HeadBucket, PutObject, CreateApplicationVersion)
-      expect(mockSend).toHaveBeenCalledTimes(5);
+      // Fails before packaging, upload, or version creation so the label is not consumed
+      const archiver = require('archiver');
+      expect(archiver).not.toHaveBeenCalled();
+      expect(createVersionInputs()).toHaveLength(0);
+      expect(mockSend).toHaveBeenCalledTimes(2);
     });
 
     it('should fail create environment when no platform configuration is provided', async () => {

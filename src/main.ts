@@ -103,12 +103,14 @@ export async function run(): Promise<void> {
           'Remove image-uri/build-configuration and provide solution-stack-name or platform-arn, or target a Beanstalk Cluster environment.'
         );
       }
-    } else if (createEnvironmentIfNotExists) {
+    } else if (!createEnvironmentIfNotExists) {
+      // Nothing can be deployed, so fail before packaging, uploading, or creating a version —
+      // a version created now would only consume the label.
+      throw new Error(`Environment ${environmentName} does not exist and create-environment-if-not-exists is false`);
+    } else {
       // The environment will be created, so validate its option-settings now — before packaging,
       // uploading, creating a version, or (build-configuration) running a CodeBuild image build —
       // rather than after those steps have run and consumed the label.
-      // (When create-environment-if-not-exists is false, the version is still created first and
-      // the run then fails, matching the action's long-standing behavior.)
       if (isClusterMode) {
         validateOptionSettingsForCreateClusterMode(optionSettings);
       } else {
@@ -146,15 +148,15 @@ export async function run(): Promise<void> {
     } else if (buildConfiguration) {
       // Beanstalk Cluster auto-containerization: zip → S3 → CreateApplicationVersion with ImageConfiguration.Build.
       // Sent to the service as ImageConfiguration.Build; the service validates the field values.
-      // The SDK serializer only emits the fields it models, so warn about any others up front:
-      // they would otherwise vanish from the request while the version label is still consumed.
+      // The SDK serializer only emits the fields it models, so any other field would silently
+      // vanish from the request while the version label is consumed — fail before that happens.
       const parsedBuildConfig = JSON.parse(buildConfiguration) as ImageBuildConfiguration;
       const unknownFields = unknownImageBuildConfigurationFields(parsedBuildConfig);
       if (unknownFields.length > 0) {
-        core.warning(
+        throw new Error(
           `build-configuration field(s) ${unknownFields.join(', ')} are not part of ImageConfiguration.Build in the ` +
-          'AWS SDK bundled with this action and will not be sent to Elastic Beanstalk. ' +
-          'If the API supports them, use a release of the action built with a newer SDK.'
+          'AWS SDK bundled with this action and would not be sent to Elastic Beanstalk. Remove them, or if the API ' +
+          'supports them, use a release of the action built with a newer SDK.'
         );
       }
 
@@ -301,10 +303,6 @@ export async function run(): Promise<void> {
       deploymentActionType = 'update';
       core.endGroup();
     } else {
-      if (!createEnvironmentIfNotExists) {
-        throw new Error(`Environment ${environmentName} does not exist and create-environment-if-not-exists is false`);
-      }
-
       core.startGroup('🆕 Creating new environment');
       await createEnvironment(
         clients,

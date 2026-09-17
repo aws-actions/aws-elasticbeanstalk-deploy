@@ -61,6 +61,13 @@ jest.mock('@aws-sdk/client-sts', () => ({
 
 import * as fs from 'fs';
 import { uploadToS3, createS3Bucket } from '../aws-operations';
+
+/** HeadBucket failure for a bucket that does not exist (S3 returns HTTP 404). */
+function notFoundError(): Error {
+  const err = new Error('NotFound');
+  (err as any).$metadata = { httpStatusCode: 404 };
+  return err;
+}
 import { AWSClients } from '../aws-clients';
 
 const mockedFs = fs as jest.Mocked<typeof fs>;
@@ -126,7 +133,7 @@ describe('S3 Operations', () => {
 
     it('should create bucket if it does not exist', async () => {
       mockSend
-        .mockRejectedValueOnce(new Error('NoSuchBucket')) // HeadBucket throws (bucket doesn't exist)
+        .mockRejectedValueOnce(notFoundError()) // HeadBucket 404 (bucket doesn't exist)
         .mockResolvedValueOnce({}); // CreateBucket succeeds
 
       await createS3Bucket(mockClients, 'us-east-1', 'new-bucket', '123456789012', 3, 1);
@@ -136,7 +143,7 @@ describe('S3 Operations', () => {
 
     it('should create bucket with location constraint for non-us-east-1 regions', async () => {
       mockSend
-        .mockRejectedValueOnce(new Error('NoSuchBucket')) // HeadBucket throws (bucket doesn't exist)
+        .mockRejectedValueOnce(notFoundError()) // HeadBucket 404 (bucket doesn't exist)
         .mockResolvedValueOnce({}); // CreateBucket with LocationConstraint succeeds
 
       await createS3Bucket(mockClients, 'eu-central-1', 'euro-bucket', '123456789012', 3, 1);
@@ -146,7 +153,7 @@ describe('S3 Operations', () => {
 
     it('should handle retry logic on failure', async () => {
       mockSend
-        .mockRejectedValueOnce(new Error('NoSuchBucket')) // HeadBucket throws (bucket doesn't exist)
+        .mockRejectedValueOnce(notFoundError()) // HeadBucket 404 (bucket doesn't exist)
         .mockRejectedValueOnce(new Error('NetworkError')) // CreateBucket attempt 1 fails
         .mockResolvedValueOnce({}); // CreateBucket attempt 2 succeeds
 
@@ -192,6 +199,16 @@ describe('S3 Operations', () => {
       expect(mockSend).toHaveBeenCalledTimes(3); // HeadBucket x3, no CreateBucket
     });
 
+    it('should retry a HeadBucket failure that carries no HTTP status (e.g. a network error) instead of creating the bucket', async () => {
+      mockSend
+        .mockRejectedValueOnce(new Error('socket hang up')) // HeadBucket attempt 1: network error, no $metadata
+        .mockResolvedValueOnce({}); // HeadBucket attempt 2: bucket exists
+
+      await createS3Bucket(mockClients, 'us-east-1', 'flaky-network-bucket', '123456789012', 3, 0.001);
+
+      expect(mockSend).toHaveBeenCalledTimes(2); // two HeadBucket attempts, no CreateBucket
+    });
+
     it('should not retry a 404 HeadBucket and go straight to creating the bucket', async () => {
       const notFound = new Error('NotFound');
       (notFound as any).$metadata = { httpStatusCode: 404 };
@@ -210,7 +227,7 @@ describe('S3 Operations', () => {
       accessDeniedError.name = 'AccessDenied';
       
       mockSend
-        .mockRejectedValueOnce(new Error('NoSuchBucket')) // HeadBucketCommand throws error (bucket doesn't exist)
+        .mockRejectedValueOnce(notFoundError()) // HeadBucket 404 (bucket doesn't exist)
         .mockRejectedValueOnce(accessDeniedError); // First CreateBucketCommand fails with AccessDenied
 
       await expect(createS3Bucket(mockClients, 'us-east-1', 'permission-denied-bucket', '123456789012', 3, 1))
@@ -224,7 +241,7 @@ describe('S3 Operations', () => {
       bucketExistsError.name = 'BucketAlreadyExists';
 
       mockSend
-        .mockRejectedValueOnce(new Error('NoSuchBucket')) // HeadBucketCommand throws error (bucket doesn't exist)
+        .mockRejectedValueOnce(notFoundError()) // HeadBucket 404 (bucket doesn't exist)
         .mockRejectedValueOnce(bucketExistsError) // CreateBucketCommand attempt 1 fails
         .mockRejectedValueOnce(bucketExistsError) // CreateBucketCommand attempt 2 fails (retry 1)
         .mockRejectedValueOnce(bucketExistsError); // CreateBucketCommand attempt 3 fails (retry 2)
@@ -240,7 +257,7 @@ describe('S3 Operations', () => {
       invalidNameError.name = 'InvalidBucketName';
 
       mockSend
-        .mockRejectedValueOnce(new Error('NoSuchBucket')) // HeadBucketCommand throws error (bucket doesn't exist)
+        .mockRejectedValueOnce(notFoundError()) // HeadBucket 404 (bucket doesn't exist)
         .mockRejectedValueOnce(invalidNameError) // CreateBucketCommand attempt 1 fails
         .mockRejectedValueOnce(invalidNameError); // CreateBucketCommand attempt 2 fails (retry 1)
 
