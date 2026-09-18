@@ -1,9 +1,19 @@
 name: Integration Test
 
+# Create, update, and tear down one environment per deployment mode, in parallel:
+#   standard       Beanstalk Standard, source bundle
+#   cluster-byoi   Beanstalk Cluster, image pushed to ECR and deployed with image-uri
+#   cluster-build  Beanstalk Cluster, image built by the service from build-configuration
+#
+# Secrets (environment "integ-test"): INTEG_TEST_ROLE_ARN (OIDC role; needs iam:GetRole/PassRole
+# on the four roles below, iam:CreateServiceLinkedRole, and ECR push for the BYOI job),
+# AWS_ACCOUNT_ID, AWS_ROLE_ID, INTEG_CLUSTER_ROLE_ARN, INTEG_NODE_ROLE_ARN,
+# INTEG_OBSERVABILITY_ROLE_ARN, INTEG_CODEBUILD_ROLE_ARN.
+
 on:
   # Uses pull_request_target so fork PRs run in the base repo context.
   pull_request_target:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   # Allows you to run this manually from the "Actions" tab
   workflow_dispatch:
 
@@ -19,17 +29,43 @@ concurrency:
 
 jobs:
   integ-test:
-    name: Integration Test
+    name: Integration Test (${{ matrix.mode }})
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: ${{ matrix.job_timeout_minutes }}
     environment: integ-test
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request_target'
+    # Skip draft PRs
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request_target' && github.event.pull_request.draft == false)
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: standard
+            region: us-east-1
+            suffix: std
+            job_timeout_minutes: 35
+            wait_timeout_seconds: 600
+            cleanup_timeout_seconds: 600
+          # Cluster environments may provision an EKS cluster (15-20 min); teardown is similar
+          - mode: cluster-byoi
+            region: us-west-1
+            suffix: byoi
+            job_timeout_minutes: 90
+            wait_timeout_seconds: 1800
+            cleanup_timeout_seconds: 1500
+          - mode: cluster-build
+            region: us-west-1
+            suffix: build
+            job_timeout_minutes: 90
+            wait_timeout_seconds: 1800
+            cleanup_timeout_seconds: 1500
 
     env:
-      AWS_REGION: us-east-1
-      # Unique naming per run ensures PRs don't collide
-      APP_NAME: eb-test-${{ github.event.pull_request.number || 'manual' }}-${{ github.run_id }}
-      ENV_NAME: it-${{ github.event.pull_request.number || 'manual' }}-${{ github.run_id }}
+      AWS_REGION: ${{ matrix.region }}
+      # Unique per run, attempt, and mode so PRs, parallel jobs, and re-runs don't collide
+      APP_NAME: eb-test-${{ github.event.pull_request.number || 'manual' }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.suffix }}
+      ENV_NAME: it-${{ github.event.pull_request.number || 'manual' }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.suffix }}
+      ECR_REPOSITORY: eb-it-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.suffix }}
 
     steps:
       - name: Checkout PR branch
@@ -42,11 +78,18 @@ jobs:
         env:
           M_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
           M_ROLE: ${{ secrets.AWS_ROLE_ID }}
+          M_CLUSTER_ROLE: ${{ secrets.INTEG_CLUSTER_ROLE_ARN }}
+          M_NODE_ROLE: ${{ secrets.INTEG_NODE_ROLE_ARN }}
+          M_OBS_ROLE: ${{ secrets.INTEG_OBSERVABILITY_ROLE_ARN }}
+          M_CODEBUILD_ROLE: ${{ secrets.INTEG_CODEBUILD_ROLE_ARN }}
         run: |
           set +x # Disable command echoing
           # Register masks
           echo "::add-mask::$M_ACCOUNT"
           echo "::add-mask::$M_ROLE"
+          for v in "$M_CLUSTER_ROLE" "$M_NODE_ROLE" "$M_OBS_ROLE" "$M_CODEBUILD_ROLE"; do
+            [ -n "$v" ] && echo "::add-mask::$v"
+          done
           echo "::add-mask::Authenticated as assumedRoleId"
           set -x
 
@@ -60,10 +103,16 @@ jobs:
           npm ci
           npm run build
 
+      # cluster-build also bundles the Dockerfile; cluster-byoi uploads no bundle
       - name: Create test application zip
+        if: matrix.mode != 'cluster-byoi'
         run: |
           cd integ-test
-          zip -r ../test-app.zip application.py
+          if [ "${{ matrix.mode }}" = "cluster-build" ]; then
+            zip -r ../test-app.zip application.py Dockerfile
+          else
+            zip -r ../test-app.zip application.py
+          fi
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
@@ -73,7 +122,9 @@ jobs:
           mask-aws-account-id: 'true'
           role-session-name: GitHubActions
 
+      # ---------------------------------------------------------------- standard only
       - name: Get latest Python platform
+        if: matrix.mode == 'standard'
         id: platform
         shell: bash
         run: |
@@ -88,6 +139,70 @@ jobs:
           echo "name=$PLATFORM_ARN" >> "$GITHUB_OUTPUT"
           set -x
 
+      # ---------------------------------------------------------------- cluster-byoi only
+      - name: Login to Amazon ECR
+        if: matrix.mode == 'cluster-byoi'
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
+
+      - name: Build and push test image
+        if: matrix.mode == 'cluster-byoi'
+        id: image
+        shell: bash
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set +x
+          echo "::add-mask::$REGISTRY"
+          aws ecr create-repository --repository-name "$ECR_REPOSITORY" --region "$AWS_REGION" > /dev/null
+          IMAGE="$REGISTRY/$ECR_REPOSITORY"
+          # --platform matches the environment's default (x86) node architecture
+          docker build --platform linux/amd64 -t "$IMAGE:create" -t "$IMAGE:update" integ-test
+          docker push "$IMAGE:create" > /dev/null
+          docker push "$IMAGE:update" > /dev/null
+          echo "uri=$IMAGE" >> "$GITHUB_OUTPUT"
+          set -x
+
+      # ---------------------------------------------------------------- shared inputs
+      # Inputs unused by a mode are passed as empty strings, which the action treats as unset
+      - name: Resolve mode-specific inputs
+        id: inputs
+        shell: bash
+        env:
+          CLUSTER_ROLE: ${{ secrets.INTEG_CLUSTER_ROLE_ARN }}
+          NODE_ROLE: ${{ secrets.INTEG_NODE_ROLE_ARN }}
+          OBS_ROLE: ${{ secrets.INTEG_OBSERVABILITY_ROLE_ARN }}
+          CODEBUILD_ROLE: ${{ secrets.INTEG_CODEBUILD_ROLE_ARN }}
+        run: |
+          set +x
+          if [ "${{ matrix.mode }}" = "standard" ]; then
+            OPTION_SETTINGS='[
+              {"Namespace": "aws:autoscaling:launchconfiguration", "OptionName": "IamInstanceProfile", "Value": "aws-elasticbeanstalk-ec2-role"},
+              {"Namespace": "aws:elasticbeanstalk:environment", "OptionName": "ServiceRole", "Value": "aws-elasticbeanstalk-service-role"}
+            ]'
+            BUILD_CONFIGURATION=''
+          else
+            for v in CLUSTER_ROLE NODE_ROLE OBS_ROLE; do
+              if [ -z "${!v}" ]; then echo "::error::Secret for $v is not set in the integ-test environment."; exit 1; fi
+            done
+            OPTION_SETTINGS="[
+              {\"Namespace\": \"aws:elasticbeanstalk:eks\", \"OptionName\": \"cluster-role\", \"Value\": \"$CLUSTER_ROLE\"},
+              {\"Namespace\": \"aws:elasticbeanstalk:eks\", \"OptionName\": \"node-role\", \"Value\": \"$NODE_ROLE\"},
+              {\"Namespace\": \"aws:elasticbeanstalk:eks:environment\", \"OptionName\": \"observability-role\", \"Value\": \"$OBS_ROLE\"}
+            ]"
+            BUILD_CONFIGURATION=''
+            if [ "${{ matrix.mode }}" = "cluster-build" ]; then
+              if [ -z "$CODEBUILD_ROLE" ]; then echo "::error::Secret INTEG_CODEBUILD_ROLE_ARN is not set in the integ-test environment."; exit 1; fi
+              # Short build timeout: the fixture builds in ~2 min
+              BUILD_CONFIGURATION="{\"Type\": \"docker\", \"DockerfileLocation\": \"Dockerfile\", \"CodeBuildServiceRole\": \"$CODEBUILD_ROLE\", \"TimeoutInMinutes\": 15}"
+            fi
+          fi
+          {
+            echo "option_settings<<EOF"; echo "$OPTION_SETTINGS"; echo "EOF"
+            echo "build_configuration<<EOF"; echo "$BUILD_CONFIGURATION"; echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          set -x
+
       - name: Deploy - Create Environment
         id: deploy-create
         uses: ./ # Points to the action in the current repository
@@ -96,31 +211,29 @@ jobs:
           application-name: ${{ env.APP_NAME }}
           environment-name: ${{ env.ENV_NAME }}
           version-label: create-${{ github.run_id }}
-          deployment-package-path: test-app.zip
+          deployment-package-path: ${{ matrix.mode != 'cluster-byoi' && 'test-app.zip' || '' }}
           platform-arn: ${{ steps.platform.outputs.name }}
+          image-uri: ${{ matrix.mode == 'cluster-byoi' && format('{0}:create', steps.image.outputs.uri) || '' }}
+          build-configuration: ${{ steps.inputs.outputs.build_configuration }}
           create-environment-if-not-exists: 'true'
           create-application-if-not-exists: 'true'
           wait-for-deployment: 'false'
           wait-for-environment-recovery: 'false'
-          option-settings: |
-            [
-              {"Namespace": "aws:autoscaling:launchconfiguration", "OptionName": "IamInstanceProfile", "Value": "aws-elasticbeanstalk-ec2-role"},
-              {"Namespace": "aws:elasticbeanstalk:environment", "OptionName": "ServiceRole", "Value": "aws-elasticbeanstalk-service-role"}
-            ]
+          option-settings: ${{ steps.inputs.outputs.option_settings }}
 
       - name: Wait for Create
         shell: bash
         run: |
           set +x
-          echo "⏳ Waiting for environment launch (10m timeout)..."
+          TIMEOUT_SECONDS=${{ matrix.wait_timeout_seconds }}
+          echo "⏳ Waiting for environment launch (${TIMEOUT_SECONDS}s timeout)..."
 
-          TIMEOUT_SECONDS=600
           START_TIME=$(date +%s)
           END_TIME=$((START_TIME + TIMEOUT_SECONDS))
 
           while true; do
             if [ "$(date +%s)" -gt "$END_TIME" ]; then
-              echo "::error::Create timed out after 10 minutes."
+              echo "::error::Create timed out after ${TIMEOUT_SECONDS}s."
               exit 1
             fi
 
@@ -162,6 +275,25 @@ jobs:
           fi
           set -x
 
+      # Ready status alone doesn't prove the app serves; require the fixture's response
+      - name: Verify application responds (create)
+        shell: bash
+        env:
+          ENV_URL: ${{ steps.deploy-create.outputs.environment-url }}
+        run: |
+          set +x
+          # Standard serves HTTP; Cluster serves HTTPS
+          for i in $(seq 1 12); do
+            for u in "http://$ENV_URL/" "https://$ENV_URL/"; do
+              BODY=$(curl -sk --max-time 15 "$u" 2>/dev/null || true)
+              if [ "$BODY" == "Healthy" ]; then echo "✅ Application responded on ${u%%:*}"; exit 0; fi
+            done
+            echo "...no healthy response yet (attempt $i/12). Retrying in 15s..."
+            sleep 15
+          done
+          echo "::error::Application did not return 'Healthy' within 3 minutes."
+          exit 1
+
       - name: Pre-mask Update Details
         shell: bash
         run: |
@@ -170,7 +302,7 @@ jobs:
             --environment-names "${{ env.ENV_NAME }}" \
             --region "${{ env.AWS_REGION }}" \
             --query "Environments[0].CNAME" --output text)
-          
+
           echo "::add-mask::$URL"
           echo "::add-mask::update-${{ github.run_id }}"
           set -x
@@ -183,7 +315,9 @@ jobs:
           application-name: ${{ env.APP_NAME }}
           environment-name: ${{ env.ENV_NAME }}
           version-label: update-${{ github.run_id }}
-          deployment-package-path: test-app.zip
+          deployment-package-path: ${{ matrix.mode != 'cluster-byoi' && 'test-app.zip' || '' }}
+          image-uri: ${{ matrix.mode == 'cluster-byoi' && format('{0}:update', steps.image.outputs.uri) || '' }}
+          build-configuration: ${{ steps.inputs.outputs.build_configuration }}
           wait-for-deployment: 'false'
           wait-for-environment-recovery: 'false'
 
@@ -191,15 +325,15 @@ jobs:
         shell: bash
         run: |
           set +x
-          echo "⏳ Waiting for environment update (10m timeout)..."
+          TIMEOUT_SECONDS=${{ matrix.wait_timeout_seconds }}
+          echo "⏳ Waiting for environment update (${TIMEOUT_SECONDS}s timeout)..."
 
-          TIMEOUT_SECONDS=600
           START_TIME=$(date +%s)
           END_TIME=$((START_TIME + TIMEOUT_SECONDS))
 
           while true; do
             if [ "$(date +%s)" -gt "$END_TIME" ]; then
-              echo "::error::Update timed out after 10 minutes."
+              echo "::error::Update timed out after ${TIMEOUT_SECONDS}s."
               exit 1
             fi
 
@@ -241,16 +375,33 @@ jobs:
           fi
           set -x
 
+      - name: Verify application responds (update)
+        shell: bash
+        env:
+          ENV_URL: ${{ steps.deploy-update.outputs.environment-url }}
+        run: |
+          set +x
+          for i in $(seq 1 12); do
+            for u in "http://$ENV_URL/" "https://$ENV_URL/"; do
+              BODY=$(curl -sk --max-time 15 "$u" 2>/dev/null || true)
+              if [ "$BODY" == "Healthy" ]; then echo "✅ Application responded on ${u%%:*}"; exit 0; fi
+            done
+            echo "...no healthy response yet (attempt $i/12). Retrying in 15s..."
+            sleep 15
+          done
+          echo "::error::Application did not return 'Healthy' within 3 minutes."
+          exit 1
+
       - name: Cleanup
         if: always() # Ensures cleanup runs even if tests fail
         shell: bash
         run: |
           set +x
-          echo "Cleaning up resources (10m timeout)..."
+          TIMEOUT_SECONDS=${{ matrix.cleanup_timeout_seconds }}
+          echo "Cleaning up resources (${TIMEOUT_SECONDS}s timeout)..."
           # Silently initiate termination
           aws elasticbeanstalk terminate-environment --environment-name "${{ env.ENV_NAME }}" --region "${{ env.AWS_REGION }}" > /dev/null 2>&1 || true
-          
-          TIMEOUT_SECONDS=600
+
           START_TIME=$(date +%s)
           END_TIME=$((START_TIME + TIMEOUT_SECONDS))
 
@@ -272,4 +423,9 @@ jobs:
 
           # Final delete of the app container and all its versions
           aws elasticbeanstalk delete-application --application-name "${{ env.APP_NAME }}" --terminate-env-by-force --region "${{ env.AWS_REGION }}" > /dev/null 2>&1 || true
+
+          # cluster-byoi: remove the per-run ECR repository
+          if [ "${{ matrix.mode }}" = "cluster-byoi" ]; then
+            aws ecr delete-repository --repository-name "${{ env.ECR_REPOSITORY }}" --force --region "${{ env.AWS_REGION }}" > /dev/null 2>&1 || true
+          fi
           set -x
