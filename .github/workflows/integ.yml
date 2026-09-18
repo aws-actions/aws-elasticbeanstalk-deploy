@@ -46,19 +46,20 @@ jobs:
             job_timeout_minutes: 35
             wait_timeout_seconds: 600
             cleanup_timeout_seconds: 600
-          # Cluster environments may provision an EKS cluster (15-20 min); teardown is similar
+          # Cluster environments may provision an EKS cluster (15-20 min). Cleanup only waits for the
+          # environment to terminate; the service retains the cluster for reuse and removes it later.
           - mode: cluster-byoi
             region: us-west-1
             suffix: byoi
-            job_timeout_minutes: 90
+            job_timeout_minutes: 75
             wait_timeout_seconds: 1800
-            cleanup_timeout_seconds: 1500
+            cleanup_timeout_seconds: 600
           - mode: cluster-build
             region: us-west-1
             suffix: build
-            job_timeout_minutes: 90
+            job_timeout_minutes: 75
             wait_timeout_seconds: 1800
-            cleanup_timeout_seconds: 1500
+            cleanup_timeout_seconds: 600
 
     env:
       AWS_REGION: ${{ matrix.region }}
