@@ -23,6 +23,7 @@ export interface Inputs {
     optionSettings?: string;
     imageUri?: string;
     buildConfiguration?: string;
+    maskResourceIdentifiers: boolean;
 }
 export declare function validateAllInputs(): {
     valid: boolean;

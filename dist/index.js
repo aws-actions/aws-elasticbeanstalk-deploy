@@ -109534,7 +109534,7 @@ async function retryWithBackoff(fn, maxRetries, retryDelay, operationName) {
     }
     const retryWord = maxRetries === 1 ? 'retry' : 'retries';
     const errorMessage = `${operationName} failed after ${totalAttempts} attempts (${maxRetries} ${retryWord}): ${lastError?.message}`;
-    core.error(errorMessage);
+    // Not logged here: main() logs the final error (sanitized when mask-resource-identifiers is on).
     throw new Error(errorMessage);
 }
 exports.retryWithBackoff = retryWithBackoff;
@@ -110187,8 +110187,33 @@ const aws_clients_1 = __nccwpck_require__(6447);
 const deploymentpackage_1 = __nccwpck_require__(3790);
 const aws_operations_1 = __nccwpck_require__(954);
 const monitoring_1 = __nccwpck_require__(1029);
+/** Values shorter than this are still masked, but with a warning: see maskIfEnabled. */
+const SHORT_MASK_VALUE_LENGTH = 8;
+/**
+ * Register a value with the runner's log masker when mask-resource-identifiers is on. No-op for
+ * empty values: core.setSecret('') would otherwise mask nothing useful (and an empty secret is
+ * rejected by the runner on some versions).
+ *
+ * Runner masks are job-wide and match substrings, so a short value such as an environment named
+ * "prod" would also turn every later "production" into "***uction". Warn so the user can pick a
+ * longer name or leave masking off. The value itself is deliberately not included in the warning.
+ */
+function maskIfEnabled(maskIdentifiers, value, label) {
+    if (!maskIdentifiers || !value) {
+        return;
+    }
+    if (value.length < SHORT_MASK_VALUE_LENGTH) {
+        core.warning(`mask-resource-identifiers: the ${label} is only ${value.length} characters long. Masking it will also hide ` +
+            `that text wherever it appears in later steps of this job (for example inside other words or IDs). ` +
+            `Use a longer value or set mask-resource-identifiers to false if that is a problem.`);
+    }
+    core.setSecret(value);
+}
 async function run() {
     const startTime = Date.now();
+    // Hoisted so the catch block can sanitize error messages.
+    // Matches the action.yml default (false) if an error is thrown before inputs are parsed.
+    let maskIdentifiers = false;
     try {
         core.info('🚀 Starting Elastic Beanstalk deployment...');
         const inputs = (0, validations_1.validateAllInputs)();
@@ -110196,6 +110221,20 @@ async function run() {
             return;
         }
         const { awsRegion, applicationName, environmentName, applicationVersionLabel, deploymentPackagePath, sourceDirectory, solutionStackName, platformArn, createEnvironmentIfNotExists, createApplicationIfNotExists, waitForDeployment, waitForEnvironmentRecovery, deploymentTimeout, maxRetries, retryDelay, useExistingApplicationVersionIfAvailable, createS3BucketIfNotExists, s3BucketName, cnamePrefix, excludePatterns, symlinks, optionSettings, imageUri, buildConfiguration } = inputs;
+        maskIdentifiers = inputs.maskResourceIdentifiers;
+        // Mask the identifiers we know up front before anything logs them. Outputs are still set
+        // normally below; the runner masks them in log output only.
+        maskIfEnabled(maskIdentifiers, applicationName, 'application-name');
+        maskIfEnabled(maskIdentifiers, environmentName, 'environment-name');
+        // A version label equal to the commit SHA (the default when version-label is unset) is not
+        // masked: runner masks are job-wide, and hiding the SHA would blank checkout summaries,
+        // `github.sha` in later scripts, and deploy annotations for the rest of the job.
+        if (applicationVersionLabel !== process.env.GITHUB_SHA) {
+            maskIfEnabled(maskIdentifiers, applicationVersionLabel, 'version-label');
+        }
+        maskIfEnabled(maskIdentifiers, s3BucketName, 's3-bucket-name');
+        maskIfEnabled(maskIdentifiers, cnamePrefix, 'cname-prefix');
+        maskIfEnabled(maskIdentifiers, imageUri, 'image-uri');
         // image-uri / build-configuration select Beanstalk Cluster mode (CreateApplicationVersion with
         // ImageConfiguration); neither set means the classic Beanstalk Standard source-bundle flow.
         const isClusterMode = !!(imageUri || buildConfiguration);
@@ -110209,6 +110248,10 @@ async function run() {
         const clients = aws_clients_1.AWSClients.getInstance(awsRegion);
         core.startGroup('🔐 Getting AWS account information');
         const accountId = await (0, aws_operations_1.getAwsAccountId)(clients, maxRetries, retryDelay);
+        maskIfEnabled(maskIdentifiers, accountId, 'AWS account ID');
+        // The default bucket name embeds the account ID and can appear in errors thrown inside
+        // uploadToS3, so register it before that call rather than from its result.
+        maskIfEnabled(maskIdentifiers, s3BucketName || `elasticbeanstalk-${awsRegion}-${accountId}`, 'S3 bucket name');
         core.info('✅ AWS account verified');
         core.endGroup();
         // Check the target environment before packaging anything. A Beanstalk Cluster environment
@@ -110273,15 +110316,15 @@ async function run() {
                 : { exists: false };
             if (existing.exists) {
                 core.startGroup('♻️  Reusing existing version');
-                await ensureReusableClusterVersion(clients, applicationName, applicationVersionLabel, existing.status, existing.buildTimeoutMinutes ?? aws_operations_1.DEFAULT_IMAGE_BUILD_TIMEOUT_MINUTES);
-                await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay, 'The existing version under this label has no image (for example a source bundle from a run that did not set image-uri), so it cannot be deployed to a Beanstalk Cluster environment.');
+                await ensureReusableClusterVersion(clients, applicationName, applicationVersionLabel, existing.status, existing.buildTimeoutMinutes ?? aws_operations_1.DEFAULT_IMAGE_BUILD_TIMEOUT_MINUTES, maskIdentifiers);
+                await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay, maskIdentifiers, 'The existing version under this label has no image (for example a source bundle from a run that did not set image-uri), so it cannot be deployed to a Beanstalk Cluster environment.');
                 core.info(`Version ${applicationVersionLabel} already exists, skipping version creation`);
                 core.endGroup();
             }
             else {
                 core.startGroup('📝 Creating application version (Beanstalk Cluster BYOI)');
                 await (0, aws_operations_1.createApplicationVersion)(clients, applicationName, applicationVersionLabel, undefined, undefined, maxRetries, retryDelay, createApplicationIfNotExists, imageUri);
-                await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay, 'The service did not record the image-uri on the version, so it cannot be deployed to a Beanstalk Cluster environment.');
+                await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay, maskIdentifiers, 'The service did not record the image-uri on the version, so it cannot be deployed to a Beanstalk Cluster environment.');
                 core.endGroup();
             }
         }
@@ -110313,8 +110356,8 @@ async function run() {
                 : { exists: false };
             if (existing.exists) {
                 core.startGroup('♻️  Reusing existing version');
-                await ensureReusableClusterVersion(clients, applicationName, applicationVersionLabel, existing.status, existing.buildTimeoutMinutes ?? buildTimeoutMinutes);
-                await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay, 'The existing version under this label reports PROCESSED but has no built image, so it cannot be deployed to a Beanstalk Cluster environment.');
+                await ensureReusableClusterVersion(clients, applicationName, applicationVersionLabel, existing.status, existing.buildTimeoutMinutes ?? buildTimeoutMinutes, maskIdentifiers);
+                await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay, maskIdentifiers, 'The existing version under this label reports PROCESSED but has no built image, so it cannot be deployed to a Beanstalk Cluster environment.');
                 core.info(`Version ${applicationVersionLabel} already exists, skipping packaging, S3 upload, and image build`);
                 core.endGroup();
             }
@@ -110324,16 +110367,17 @@ async function run() {
                 core.endGroup();
                 core.startGroup('☁️  Uploading to S3');
                 const uploadResult = await (0, aws_operations_1.uploadToS3)(clients, awsRegion, accountId, applicationName, applicationVersionLabel, packagePath, maxRetries, retryDelay, createS3BucketIfNotExists, s3BucketName);
+                maskIfEnabled(maskIdentifiers, uploadResult.bucket, 'S3 bucket name');
                 core.endGroup();
                 core.startGroup('📝 Creating application version (auto-containerization)');
                 await (0, aws_operations_1.createApplicationVersion)(clients, applicationName, applicationVersionLabel, uploadResult.bucket, uploadResult.key, maxRetries, retryDelay, createApplicationIfNotExists, undefined, parsedBuildConfig);
                 core.endGroup();
                 core.startGroup(`🔨 Waiting for image build to complete (up to ${buildTimeoutMinutes} minutes)`);
-                await waitForImageBuild(clients, applicationName, applicationVersionLabel, buildTimeoutMinutes);
+                await waitForImageBuild(clients, applicationName, applicationVersionLabel, buildTimeoutMinutes, maskIdentifiers);
                 // PROCESSED alone is not proof an image exists: when the service does not accept the build
                 // settings (for example a Type in the wrong case or a DockerfileLocation that is not in the
                 // bundle) it currently marks the version PROCESSED within a second without building anything.
-                await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay, 'The version reports PROCESSED but no image was built. Check the build-configuration ' +
+                await assertVersionHasImage(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay, maskIdentifiers, 'The version reports PROCESSED but no image was built. Check the build-configuration ' +
                     '(Type must be "docker" or "buildpack"; DockerfileLocation must name a file in the source bundle).');
                 core.endGroup();
             }
@@ -110351,6 +110395,7 @@ async function run() {
                 const uploadResult = await (0, aws_operations_1.uploadToS3)(clients, awsRegion, accountId, applicationName, applicationVersionLabel, packagePath, maxRetries, retryDelay, createS3BucketIfNotExists, s3BucketName);
                 bucket = uploadResult.bucket;
                 key = uploadResult.key;
+                maskIfEnabled(maskIdentifiers, bucket, 'S3 bucket name');
                 core.endGroup();
                 core.startGroup(`📝 Creating application version ${applicationVersionLabel}`);
                 await (0, aws_operations_1.createApplicationVersion)(clients, applicationName, applicationVersionLabel, bucket, key, maxRetries, retryDelay, createApplicationIfNotExists);
@@ -110362,6 +110407,7 @@ async function run() {
                 const s3Location = await (0, aws_operations_1.getVersionS3Location)(clients, applicationName, applicationVersionLabel);
                 bucket = s3Location.bucket;
                 key = s3Location.key;
+                maskIfEnabled(maskIdentifiers, bucket, 'S3 bucket name');
                 core.endGroup();
             }
         }
@@ -110370,7 +110416,7 @@ async function run() {
         // for a previous deployment to finish: its ERROR events must not fail this run.
         let deploymentStartTime = new Date();
         if (envCheck.exists) {
-            await (0, monitoring_1.waitForEnvironmentReady)(clients, applicationName, environmentName, deploymentTimeout);
+            await (0, monitoring_1.waitForEnvironmentReady)(clients, applicationName, environmentName, deploymentTimeout, maskIdentifiers);
             deploymentStartTime = new Date();
             core.startGroup('🔄 Updating environment');
             await (0, aws_operations_1.updateEnvironment)(clients, applicationName, environmentName, applicationVersionLabel, optionSettings, solutionStackName, platformArn, maxRetries, retryDelay);
@@ -110386,15 +110432,17 @@ async function run() {
         let lastSeenEventDate;
         if (waitForDeployment) {
             core.startGroup('⏳ Waiting for deployment');
-            lastSeenEventDate = await (0, monitoring_1.waitForDeploymentCompletion)(clients, applicationName, environmentName, deploymentTimeout, deploymentActionType, deploymentStartTime, applicationVersionLabel);
+            lastSeenEventDate = await (0, monitoring_1.waitForDeploymentCompletion)(clients, applicationName, environmentName, deploymentTimeout, maskIdentifiers, deploymentActionType, deploymentStartTime, applicationVersionLabel);
             core.endGroup();
         }
         if (waitForEnvironmentRecovery) {
             core.startGroup('🏥 Waiting for environment health');
-            await (0, monitoring_1.waitForHealthRecovery)(clients, applicationName, environmentName, deploymentTimeout, deploymentStartTime, lastSeenEventDate);
+            await (0, monitoring_1.waitForHealthRecovery)(clients, applicationName, environmentName, deploymentTimeout, maskIdentifiers, deploymentStartTime, lastSeenEventDate);
             core.endGroup();
         }
         const envInfo = await (0, monitoring_1.getEnvironmentInfo)(clients, applicationName, environmentName);
+        maskIfEnabled(maskIdentifiers, envInfo.url, 'environment URL');
+        maskIfEnabled(maskIdentifiers, envInfo.id, 'environment ID');
         core.setOutput('environment-url', envInfo.url);
         core.setOutput('environment-id', envInfo.id);
         core.setOutput('environment-status', envInfo.status);
@@ -110414,8 +110462,11 @@ async function run() {
     }
     catch (error) {
         const totalTime = Math.round((Date.now() - startTime) / 1000);
-        core.error(`❌ Deployment failed after ${totalTime}s: ${error.message}`);
-        core.setFailed(`Deployment failed: ${error.message}`);
+        const errorMessage = maskIdentifiers
+            ? (0, monitoring_1.sanitizeResourceIdentifiers)(error.message)
+            : error.message;
+        core.error(`❌ Deployment failed after ${totalTime}s: ${errorMessage}`);
+        core.setFailed(`Deployment failed: ${errorMessage}`);
     }
 }
 exports.run = run;
@@ -110428,7 +110479,7 @@ const BUILD_POLL_INTERVAL_MS = 15000;
  * other status is treated as in progress. The loop itself is the retry for transient describe errors,
  * so the deadline stays real (retryWithBackoff here could sleep far past it).
  */
-async function waitForImageBuild(clients, applicationName, versionLabel, timeoutMinutes) {
+async function waitForImageBuild(clients, applicationName, versionLabel, timeoutMinutes, maskIdentifiers) {
     const deadlineMs = (timeoutMinutes * 60 + 120) * 1000;
     const start = Date.now();
     let status;
@@ -110442,7 +110493,7 @@ async function waitForImageBuild(clients, applicationName, versionLabel, timeout
             // then misreported as a build timeout.
             if ((0, aws_operations_1.isNonRetryableError)(error))
                 throw error;
-            core.warning(`Could not read build status (will retry): ${error.message}`);
+            core.warning(`Could not read build status (will retry): ${(0, monitoring_1.describeErrorMessage)(error, maskIdentifiers)}`);
         }
         const normalized = status?.toUpperCase();
         if (normalized === 'PROCESSED' || normalized === 'FAILED') {
@@ -110462,7 +110513,7 @@ async function waitForImageBuild(clients, applicationName, versionLabel, timeout
             catch (error) {
                 if ((0, aws_operations_1.isNonRetryableError)(error))
                     throw error;
-                core.warning(`Could not read build status: ${error.message}`);
+                core.warning(`Could not read build status: ${(0, monitoring_1.describeErrorMessage)(error, maskIdentifiers)}`);
             }
             break;
         }
@@ -110482,7 +110533,7 @@ async function waitForImageBuild(clients, applicationName, versionLabel, timeout
  * run of the same commit) is waited for. Anything else (PROCESSED, or UNPROCESSED for a pre-built
  * image) is reused as-is.
  */
-async function ensureReusableClusterVersion(clients, applicationName, versionLabel, status, buildTimeoutMinutes) {
+async function ensureReusableClusterVersion(clients, applicationName, versionLabel, status, buildTimeoutMinutes, maskIdentifiers) {
     const normalized = status?.toUpperCase();
     if (normalized === 'FAILED') {
         throw new Error(`Application version ${versionLabel} already exists but its image build FAILED, so it cannot be deployed, ` +
@@ -110490,7 +110541,7 @@ async function ensureReusableClusterVersion(clients, applicationName, versionLab
     }
     if (normalized && normalized !== 'PROCESSED' && normalized !== 'UNPROCESSED') {
         core.info(`Version ${versionLabel} already exists and its image build is still ${status}; waiting for it to finish`);
-        await waitForImageBuild(clients, applicationName, versionLabel, buildTimeoutMinutes);
+        await waitForImageBuild(clients, applicationName, versionLabel, buildTimeoutMinutes, maskIdentifiers);
     }
 }
 /**
@@ -110499,8 +110550,11 @@ async function ensureReusableClusterVersion(clients, applicationName, versionLab
  * user gets a clear failure instead of UpdateEnvironment rejecting the version and the label being
  * consumed by an undeployable version.
  */
-async function assertVersionHasImage(clients, applicationName, versionLabel, maxRetries, retryDelay, reason) {
+async function assertVersionHasImage(clients, applicationName, versionLabel, maxRetries, retryDelay, maskIdentifiers, reason) {
     const imageUri = await (0, aws_operations_1.getApplicationVersionImageUri)(clients, applicationName, versionLabel, maxRetries, retryDelay);
+    // The resolved URI (digest-pinned for built images) is only known now, so register it with the
+    // masker before logging it.
+    maskIfEnabled(maskIdentifiers, imageUri, 'image URI');
     if (!imageUri) {
         throw new Error(`Application version ${versionLabel} has no container image. ${reason} ` +
             'A label cannot be recreated, so use a new version-label (or delete this version) and retry.');
@@ -110543,13 +110597,68 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getEnvironmentInfo = exports.waitForEnvironmentReady = exports.waitForHealthRecovery = exports.waitForDeploymentCompletion = void 0;
+exports.getEnvironmentInfo = exports.waitForEnvironmentReady = exports.waitForHealthRecovery = exports.waitForDeploymentCompletion = exports.describeErrorMessage = exports.sanitizeResourceIdentifiers = void 0;
 const core = __importStar(__nccwpck_require__(7484));
 const aws_operations_1 = __nccwpck_require__(954);
 /**
- * Fetch recent environment events for debugging and check for fatal/error events.
+ * Strip dynamic AWS resource identifiers from a message.
+ * Used to sanitize error messages when mask-resource-identifiers is enabled. Identifiers the action
+ * knows up front (application/environment names, account ID, version label, ...) are masked by
+ * core.setSecret instead; this covers the ones only the service knows (resources it created).
+ *
+ * Scope is intentional: this only runs on error/warning messages, so it targets the identifiers
+ * Elastic Beanstalk actually embeds there. Bare 12-digit account IDs are left alone (too
+ * false-positive-prone; the account ID is masked via setSecret), and rarer VPC resource IDs
+ * (rtb-, igw-, eipassoc-, pcx-) and IPv6 are not covered.
  */
-async function describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime) {
+function sanitizeResourceIdentifiers(message) {
+    return message
+        // EC2 instance IDs: i-0abc123def
+        .replace(/\bi-[0-9a-f]{8,17}\b/g, '***')
+        // Security group IDs: sg-0abc123def
+        .replace(/\bsg-[0-9a-f]{8,17}\b/g, '***')
+        // ENI IDs: eni-0abc123
+        .replace(/\beni-[0-9a-f]{8,17}\b/g, '***')
+        // Subnet IDs: subnet-0abc123
+        .replace(/\bsubnet-[0-9a-f]{8,17}\b/g, '***')
+        // VPC IDs: vpc-0abc123
+        .replace(/\bvpc-[0-9a-f]{8,17}\b/g, '***')
+        // Launch template IDs: lt-0abc123def
+        .replace(/\blt-[0-9a-f]{8,17}\b/g, '***')
+        // EBS volume IDs: vol-0abc123def
+        .replace(/\bvol-[0-9a-f]{8,17}\b/g, '***')
+        // Elastic IP allocation IDs: eipalloc-0abc123
+        .replace(/\beipalloc-[0-9a-f]{8,17}\b/g, '***')
+        // NAT gateway IDs: nat-0abc123
+        .replace(/\bnat-[0-9a-f]{8,17}\b/g, '***')
+        // EB-generated resource names: awseb-e-xxx-AWSEBLoa-xxx (must precede env ID pattern)
+        .replace(/\bawseb-[a-zA-Z0-9_-]+\b/g, '***')
+        // EB environment IDs: e-abcdefghij
+        .replace(/\be-[a-z0-9]{10,}\b/g, '***')
+        // ARNs: arn:aws:service:region:account:resource (also aws-cn / aws-us-gov partitions)
+        .replace(/\barn:aws[a-z-]*:[a-zA-Z0-9_/:.+*@-]+\b/g, '***')
+        // Container image references: 123456789012.dkr.ecr.us-east-1.amazonaws.com/app:tag or @sha256:...
+        // (stops before whitespace, quotes, and closing punctuation so surrounding prose survives)
+        .replace(/\b\d{12}\.dkr\.ecr(-fips)?\.[a-z0-9-]+\.amazonaws\.com(\.cn)?\/(?:[^\s"'()[\]{}<>,;.!?]|\.(?=[^\s"'()[\]{}<>,;.!?]))+/g, '***')
+        // IPv4 addresses (octets 0-255, so dotted version strings like 1.2.3.400 are left alone)
+        .replace(/\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b/g, '***');
+}
+exports.sanitizeResourceIdentifiers = sanitizeResourceIdentifiers;
+/**
+ * Format an AWS error for a non-fatal log line, stripping resource identifiers when masking is on.
+ */
+function describeErrorMessage(error, maskIdentifiers) {
+    const message = error?.message ?? String(error);
+    return maskIdentifiers ? sanitizeResourceIdentifiers(message) : message;
+}
+exports.describeErrorMessage = describeErrorMessage;
+/**
+ * Fetch recent environment events for debugging and check for fatal/error events.
+ * Event lines are only printed when maskIdentifiers is false: they contain names of resources the
+ * service created (security groups, load balancers, instances, EKS node groups) that core.setSecret
+ * cannot know about in advance. ERROR/FATAL detection runs regardless.
+ */
+async function describeRecentEvents(clients, applicationName, environmentName, maskIdentifiers, lastSeenEventDate, deploymentStartTime) {
     try {
         const events = await (0, aws_operations_1.describeEvents)(clients, applicationName, environmentName);
         const newEvents = events.filter((event) => {
@@ -110566,7 +110675,7 @@ async function describeRecentEvents(clients, applicationName, environmentName, l
             return { hasError: false, lastEventDate: lastSeenEventDate };
         }
         // Only show header on first call
-        if (!lastSeenEventDate) {
+        if (!maskIdentifiers && !lastSeenEventDate) {
             core.info('📋 Recent events:');
         }
         // Sort events by timestamp in ascending order (oldest first)
@@ -110578,18 +110687,22 @@ async function describeRecentEvents(clients, applicationName, environmentName, l
             if (eventDate && (!mostRecentDate || eventDate > mostRecentDate)) {
                 mostRecentDate = eventDate;
             }
-            const timestamp = eventDate?.toISOString() || 'Unknown time';
             const severity = event.severity || 'INFO';
             const message = event.message || 'No message';
             if (severity === 'ERROR' || severity === 'FATAL') {
-                core.error(`  [${timestamp}] ${severity}: ${message}`);
                 fatalOrErrorEvents.push({ message });
             }
-            else if (severity === 'WARN') {
-                core.warning(`  [${timestamp}] ${severity}: ${message}`);
-            }
-            else {
-                core.info(`  [${timestamp}] ${severity}: ${message}`);
+            if (!maskIdentifiers) {
+                const timestamp = eventDate?.toISOString() || 'Unknown time';
+                if (severity === 'ERROR' || severity === 'FATAL') {
+                    core.error(`  [${timestamp}] ${severity}: ${message}`);
+                }
+                else if (severity === 'WARN') {
+                    core.warning(`  [${timestamp}] ${severity}: ${message}`);
+                }
+                else {
+                    core.info(`  [${timestamp}] ${severity}: ${message}`);
+                }
             }
         });
         if (fatalOrErrorEvents.length > 0) {
@@ -110600,7 +110713,7 @@ async function describeRecentEvents(clients, applicationName, environmentName, l
     }
     catch (error) {
         // If we can't fetch events, just log and continue
-        core.debug(`Failed to fetch events: ${error}`);
+        core.debug(`Failed to fetch events: ${describeErrorMessage(error, maskIdentifiers)}`);
         return { hasError: false, lastEventDate: lastSeenEventDate };
     }
 }
@@ -110608,7 +110721,7 @@ async function describeRecentEvents(clients, applicationName, environmentName, l
  * Wait for deployment to complete.
  * Returns the last seen event date to avoid duplicate events in subsequent monitoring.
  */
-async function waitForDeploymentCompletion(clients, applicationName, environmentName, timeout, deploymentActionType, deploymentStartTime, expectedVersionLabel) {
+async function waitForDeploymentCompletion(clients, applicationName, environmentName, timeout, maskIdentifiers, deploymentActionType, deploymentStartTime, expectedVersionLabel) {
     core.info('⏳ Waiting for deployment to complete...');
     const startTime = Date.now();
     const maxWait = timeout * 1000;
@@ -110628,7 +110741,7 @@ async function waitForDeploymentCompletion(clients, applicationName, environment
             // Always check for fatal/error events first — a launch failure can flip status to
             // Ready in the same poll cycle it errors (EB surfaces the failure via events/health,
             // not a distinct terminal status), so the Ready branch must not short-circuit past it.
-            const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+            const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, maskIdentifiers, lastSeenEventDate, deploymentStartTime);
             lastSeenEventDate = eventCheck.lastEventDate;
             if (eventCheck.hasError) {
                 throw new Error(`Environment deployment failed - fatal or error event detected: ${eventCheck.errorMessage}`);
@@ -110643,6 +110756,10 @@ async function waitForDeploymentCompletion(clients, applicationName, environment
             if (status === 'Ready' && versionMismatch) {
                 readyOnUnexpectedVersionSince ??= Date.now();
                 if (Date.now() - readyOnUnexpectedVersionSince >= rollbackConfirmationMs) {
+                    // The label the environment rolled back to is only known now; mask it like the requested one.
+                    if (maskIdentifiers && env.versionLabel) {
+                        core.setSecret(env.versionLabel);
+                    }
                     throw new Error(`Environment deployment failed - environment is running version ${env.versionLabel ?? 'unknown'} ` +
                         `instead of the requested ${expectedVersionLabel}, the update was most likely rolled back`);
                 }
@@ -110658,15 +110775,20 @@ async function waitForDeploymentCompletion(clients, applicationName, environment
         }
         await new Promise(resolve => setTimeout(resolve, pollInterval));
     }
-    // Timeout occurred - fetch events to help diagnose
-    await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+    // Timeout occurred - fetch events to help diagnose. An ERROR/FATAL event surfacing on this final
+    // check is the real cause, so report it rather than a generic timeout (with masking on
+    // the event lines themselves are not printed, so the message is the only place it would show).
+    const finalCheck = await describeRecentEvents(clients, applicationName, environmentName, maskIdentifiers, lastSeenEventDate, deploymentStartTime);
+    if (finalCheck.hasError) {
+        throw new Error(`Deployment timed out after ${timeout}s - fatal or error event detected: ${finalCheck.errorMessage}`);
+    }
     throw new Error(`Deployment timed out after ${timeout}s`);
 }
 exports.waitForDeploymentCompletion = waitForDeploymentCompletion;
 /**
  * Wait for environment health to recover.
  */
-async function waitForHealthRecovery(clients, applicationName, environmentName, timeout, deploymentStartTime, lastEventDateFromDeployment) {
+async function waitForHealthRecovery(clients, applicationName, environmentName, timeout, maskIdentifiers, deploymentStartTime, lastEventDateFromDeployment) {
     core.info('🏥 Waiting for environment health to recover...');
     const startTime = Date.now();
     const maxWait = timeout * 1000;
@@ -110683,7 +110805,7 @@ async function waitForHealthRecovery(clients, applicationName, environmentName, 
                 return;
             }
             if (health === 'Grey' || health === undefined || health === 'Red') {
-                const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+                const eventCheck = await describeRecentEvents(clients, applicationName, environmentName, maskIdentifiers, lastSeenEventDate, deploymentStartTime);
                 if (eventCheck.lastEventDate) {
                     lastSeenEventDate = eventCheck.lastEventDate;
                 }
@@ -110702,8 +110824,11 @@ async function waitForHealthRecovery(clients, applicationName, environmentName, 
         }
         await new Promise(resolve => setTimeout(resolve, 15000));
     }
-    // Timeout occurred - fetch events to help diagnose
-    await describeRecentEvents(clients, applicationName, environmentName, lastSeenEventDate, deploymentStartTime);
+    // Timeout occurred - fetch events to help diagnose (see waitForDeploymentCompletion).
+    const finalCheck = await describeRecentEvents(clients, applicationName, environmentName, maskIdentifiers, lastSeenEventDate, deploymentStartTime);
+    if (finalCheck.hasError) {
+        throw new Error(`Environment health recovery timed out after ${timeout}s - fatal or error event detected: ${finalCheck.errorMessage}`);
+    }
     throw new Error(`Environment health recovery timed out after ${timeout}s`);
 }
 exports.waitForHealthRecovery = waitForHealthRecovery;
@@ -110715,7 +110840,7 @@ exports.waitForHealthRecovery = waitForHealthRecovery;
  * The status is read fresh here rather than reusing the pre-packaging check: packaging, upload,
  * or an image build may have taken long enough for another deployment to start in between.
  */
-async function waitForEnvironmentReady(clients, applicationName, environmentName, timeout) {
+async function waitForEnvironmentReady(clients, applicationName, environmentName, timeout, maskIdentifiers) {
     const startTime = Date.now();
     const maxWait = timeout * 1000;
     const pollInterval = 10000;
@@ -110740,7 +110865,7 @@ async function waitForEnvironmentReady(clients, applicationName, environmentName
             // ones (lost permissions, expired credentials) and the terminal-state error above propagate.
             if (env !== undefined || (0, aws_operations_1.isNonRetryableError)(error))
                 throw error;
-            core.warning(`Could not read environment status (will retry): ${error.message}`);
+            core.warning(`Could not read environment status (will retry): ${describeErrorMessage(error, maskIdentifiers)}`);
             status = undefined;
         }
         const remainingMs = maxWait - (Date.now() - startTime);
@@ -110961,6 +111086,7 @@ function validateOptionalInputs() {
     const waitForEnvironmentRecovery = core.getBooleanInput('wait-for-environment-recovery');
     const useExistingApplicationVersionIfAvailable = core.getBooleanInput('use-existing-application-version-if-available');
     const createS3BucketIfNotExists = core.getBooleanInput('create-s3-bucket-if-not-exists');
+    const maskResourceIdentifiers = core.getBooleanInput('mask-resource-identifiers');
     return {
         valid: true,
         applicationVersionLabel,
@@ -110978,7 +111104,8 @@ function validateOptionalInputs() {
         symlinks,
         optionSettings,
         imageUri,
-        buildConfiguration
+        buildConfiguration,
+        maskResourceIdentifiers
     };
 }
 function checkInputConflicts(inputs) {
@@ -111074,7 +111201,8 @@ function validateAllInputs() {
         symlinks: optionalInputs.symlinks,
         optionSettings: optionalInputs.optionSettings,
         imageUri: optionalInputs.imageUri,
-        buildConfiguration: optionalInputs.buildConfiguration
+        buildConfiguration: optionalInputs.buildConfiguration,
+        maskResourceIdentifiers: optionalInputs.maskResourceIdentifiers
     };
     checkInputConflicts(validatedInputs);
     return validatedInputs;
