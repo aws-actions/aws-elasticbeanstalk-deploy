@@ -26,6 +26,7 @@ export interface Inputs {
   optionSettings?: string;
   imageUri?: string;
   buildConfiguration?: string;
+  maskResourceIdentifiers: boolean;
 }
 
 function validateRequiredInputs() {
@@ -198,6 +199,7 @@ function validateOptionalInputs() {
   const waitForEnvironmentRecovery = core.getBooleanInput('wait-for-environment-recovery');
   const useExistingApplicationVersionIfAvailable = core.getBooleanInput('use-existing-application-version-if-available');
   const createS3BucketIfNotExists = core.getBooleanInput('create-s3-bucket-if-not-exists');
+  const maskResourceIdentifiers = core.getBooleanInput('mask-resource-identifiers');
 
   return {
     valid: true,
@@ -216,7 +218,8 @@ function validateOptionalInputs() {
     symlinks,
     optionSettings,
     imageUri,
-    buildConfiguration
+    buildConfiguration,
+    maskResourceIdentifiers
   };
 }
 
@@ -341,7 +344,8 @@ export function validateAllInputs(): { valid: boolean } & Partial<Inputs> {
     symlinks: optionalInputs.symlinks!,
     optionSettings: optionalInputs.optionSettings,
     imageUri: optionalInputs.imageUri,
-    buildConfiguration: optionalInputs.buildConfiguration
+    buildConfiguration: optionalInputs.buildConfiguration,
+    maskResourceIdentifiers: optionalInputs.maskResourceIdentifiers!
   };
 
   checkInputConflicts(validatedInputs);

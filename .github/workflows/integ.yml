@@ -21,7 +21,10 @@ jobs:
   integ-test:
     name: Integration Test
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # Budget: build (~2m) + create (<=20m) + update (<=20m) + cleanup (<=10m). The deploy steps
+    # carry their own timeout-minutes so a stuck deploy fails the step (and cleanup still runs
+    # via always()) instead of the whole job being cancelled, which would skip cleanup.
+    timeout-minutes: 60
     environment: integ-test
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request_target'
 
@@ -37,17 +40,13 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Pre-emptive Masking
+      - name: Mask role ID
         shell: bash
         env:
-          M_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
           M_ROLE: ${{ secrets.AWS_ROLE_ID }}
         run: |
-          set +x # Disable command echoing
-          # Register masks
-          echo "::add-mask::$M_ACCOUNT"
+          set +x
           echo "::add-mask::$M_ROLE"
-          echo "::add-mask::Authenticated as assumedRoleId"
           set -x
 
       - name: Setup Node.js
@@ -88,8 +87,12 @@ jobs:
           echo "name=$PLATFORM_ARN" >> "$GITHUB_OUTPUT"
           set -x
 
+      # Both deploy steps run with mask-resource-identifiers on: this workflow runs in a public
+      # repository, so identifiers from the integration-test account must not appear in the log.
+      # The unmasked (default) path is covered by unit tests.
       - name: Deploy - Create Environment
         id: deploy-create
+        timeout-minutes: 20
         uses: ./ # Points to the action in the current repository
         with:
           aws-region: ${{ env.AWS_REGION }}
@@ -100,83 +103,33 @@ jobs:
           platform-arn: ${{ steps.platform.outputs.name }}
           create-environment-if-not-exists: 'true'
           create-application-if-not-exists: 'true'
-          wait-for-deployment: 'false'
-          wait-for-environment-recovery: 'false'
+          mask-resource-identifiers: 'true'
           option-settings: |
             [
               {"Namespace": "aws:autoscaling:launchconfiguration", "OptionName": "IamInstanceProfile", "Value": "aws-elasticbeanstalk-ec2-role"},
               {"Namespace": "aws:elasticbeanstalk:environment", "OptionName": "ServiceRole", "Value": "aws-elasticbeanstalk-service-role"}
             ]
 
-      - name: Wait for Create
-        shell: bash
-        run: |
-          set +x
-          echo "⏳ Waiting for environment launch (10m timeout)..."
-
-          TIMEOUT_SECONDS=600
-          START_TIME=$(date +%s)
-          END_TIME=$((START_TIME + TIMEOUT_SECONDS))
-
-          while true; do
-            if [ "$(date +%s)" -gt "$END_TIME" ]; then
-              echo "::error::Create timed out after 10 minutes."
-              exit 1
-            fi
-
-            ENV_INFO=$(aws elasticbeanstalk describe-environments --environment-names "${{ env.ENV_NAME }}" --region "${{ env.AWS_REGION }}" --query "Environments[0].[Status,Health]" --output text)
-            STATUS=$(echo "$ENV_INFO" | awk '{print $1}')
-            HEALTH=$(echo "$ENV_INFO" | awk '{print $2}')
-
-            if [ "$STATUS" == "Ready" ]; then
-              if [[ "$HEALTH" == "Green" || "$HEALTH" == "Ok" || "$HEALTH" == "Yellow" ]]; then
-                echo "✅ Create Ready (Health: $HEALTH)"
-                break
-              elif [ "$HEALTH" == "Red" ]; then
-                echo "::error::Create Ready but Health is Red."
-                exit 1
-              fi
-              echo "...Ready but Health is $HEALTH. Waiting for healthy status..."
-              sleep 15
-              continue
-            fi
-            echo "...status is $STATUS ($HEALTH). Checking again in 15s..."
-            sleep 15
-          done
-          set -x
-
-      - name: Verify and Mask Create Outputs
+      - name: Verify Create Outputs
         shell: bash
         env:
-          ENV_URL: ${{ steps.deploy-create.outputs.environment-url }}
           ENV_ID: ${{ steps.deploy-create.outputs.environment-id }}
           ACTION_TYPE: ${{ steps.deploy-create.outputs.deployment-action-type }}
         run: |
           set +x
-          echo "::add-mask::$ENV_URL"
-          echo "::add-mask::$ENV_ID"
-
+          if [ -z "$ENV_ID" ]; then
+            echo "::error::environment-id output is empty"
+            exit 1
+          fi
           if [ "$ACTION_TYPE" != "create" ]; then
             echo "::error::Expected create, got $ACTION_TYPE"
             exit 1
           fi
           set -x
 
-      - name: Pre-mask Update Details
-        shell: bash
-        run: |
-          set +x
-          URL=$(aws elasticbeanstalk describe-environments \
-            --environment-names "${{ env.ENV_NAME }}" \
-            --region "${{ env.AWS_REGION }}" \
-            --query "Environments[0].CNAME" --output text)
-          
-          echo "::add-mask::$URL"
-          echo "::add-mask::update-${{ github.run_id }}"
-          set -x
-
       - name: Deploy - Update Environment
         id: deploy-update
+        timeout-minutes: 20
         uses: ./
         with:
           aws-region: ${{ env.AWS_REGION }}
@@ -184,47 +137,9 @@ jobs:
           environment-name: ${{ env.ENV_NAME }}
           version-label: update-${{ github.run_id }}
           deployment-package-path: test-app.zip
-          wait-for-deployment: 'false'
-          wait-for-environment-recovery: 'false'
+          mask-resource-identifiers: 'true'
 
-      - name: Wait for Update
-        shell: bash
-        run: |
-          set +x
-          echo "⏳ Waiting for environment update (10m timeout)..."
-
-          TIMEOUT_SECONDS=600
-          START_TIME=$(date +%s)
-          END_TIME=$((START_TIME + TIMEOUT_SECONDS))
-
-          while true; do
-            if [ "$(date +%s)" -gt "$END_TIME" ]; then
-              echo "::error::Update timed out after 10 minutes."
-              exit 1
-            fi
-
-            ENV_INFO=$(aws elasticbeanstalk describe-environments --environment-names "${{ env.ENV_NAME }}" --region "${{ env.AWS_REGION }}" --query "Environments[0].[Status,Health]" --output text)
-            STATUS=$(echo "$ENV_INFO" | awk '{print $1}')
-            HEALTH=$(echo "$ENV_INFO" | awk '{print $2}')
-
-            if [ "$STATUS" == "Ready" ]; then
-              if [[ "$HEALTH" == "Green" || "$HEALTH" == "Ok" || "$HEALTH" == "Yellow" ]]; then
-                echo "✅ Update Ready (Health: $HEALTH)"
-                break
-              elif [ "$HEALTH" == "Red" ]; then
-                echo "::error::Update Ready but Health is Red."
-                exit 1
-              fi
-              echo "...Ready but Health is $HEALTH. Waiting for healthy status..."
-              sleep 15
-              continue
-            fi
-            echo "...updating: $STATUS ($HEALTH). Checking again in 15s..."
-            sleep 15
-          done
-          set -x
-
-      - name: Verify and Mask Update Outputs
+      - name: Verify Update Outputs
         shell: bash
         env:
           ENV_URL: ${{ steps.deploy-update.outputs.environment-url }}
@@ -232,9 +147,10 @@ jobs:
           ACTION_TYPE: ${{ steps.deploy-update.outputs.deployment-action-type }}
         run: |
           set +x
-          echo "::add-mask::$ENV_URL"
-          echo "::add-mask::$ENV_ID"
-
+          if [ -z "$ENV_URL" ] || [ -z "$ENV_ID" ]; then
+            echo "::error::environment-url or environment-id output is empty"
+            exit 1
+          fi
           if [ "$ACTION_TYPE" != "update" ]; then
             echo "::error::Expected update, got $ACTION_TYPE"
             exit 1

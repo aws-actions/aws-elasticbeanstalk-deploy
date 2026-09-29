@@ -84,6 +84,10 @@ inputs:
   build-configuration:
     description: 'JSON object for Beanstalk Cluster auto-containerization (build from source): the Build settings, e.g. {"Type":"docker","CodeBuildServiceRole":"arn:..."}. When set, the action creates a Beanstalk Cluster environment and triggers a CodeBuild image build. Mutually exclusive with image-uri.'
     required: false
+  mask-resource-identifiers:
+    description: 'When true, infrastructure identifiers (account ID, bucket names, application/environment names, version labels, environment URL/ID, image URIs) are masked as *** in the log, Elastic Beanstalk event details are suppressed, and error messages are stripped of AWS resource IDs. Default false: logs are unchanged. Masking is job-wide and matches substrings, so it also applies to later steps in the job and a short value (for example an environment named prod) will hide that text inside other words; the action warns when a masked value is shorter than 8 characters. A version label equal to the commit SHA (the default when version-label is unset) is never masked. Action outputs are always set and remain readable by later steps in the same job, but GitHub does not forward masked values as job-level outputs to other jobs.'
+    required: false
+    default: 'false'
 
 outputs:
   environment-url:

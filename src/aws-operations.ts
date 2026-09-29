@@ -257,7 +257,7 @@ export async function retryWithBackoff<T>(
 
   const retryWord = maxRetries === 1 ? 'retry' : 'retries';
   const errorMessage = `${operationName} failed after ${totalAttempts} attempts (${maxRetries} ${retryWord}): ${lastError?.message}`;
-  core.error(errorMessage);
+  // Not logged here: main() logs the final error (sanitized when mask-resource-identifiers is on).
   throw new Error(errorMessage);
 }
 
