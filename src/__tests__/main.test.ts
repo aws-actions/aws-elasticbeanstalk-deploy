@@ -860,6 +860,7 @@ describe('Main Functions', () => {
       mockSend
         .mockResolvedValueOnce({ Account: '123456789012' }) // GetCallerIdentity
         .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green', Tier: { Name: 'WebServer' } }] }) // DescribeEnvironments
+        .mockResolvedValueOnce({ ApplicationVersions: [] }) // DescribeApplicationVersions (label free)
         .mockResolvedValueOnce({}) // HeadBucket (bucket exists, owned by us)
         .mockResolvedValueOnce({}) // PutObject
         .mockResolvedValueOnce({}) // CreateAppVersion
@@ -885,6 +886,7 @@ describe('Main Functions', () => {
       mockSend
         .mockResolvedValueOnce({ Account: '123456789012' }) // GetCallerIdentity
         .mockResolvedValueOnce({ Environments: [] }) // DescribeEnvironments (no env found)
+        .mockResolvedValueOnce({ ApplicationVersions: [] }) // DescribeApplicationVersions (label free)
         .mockResolvedValueOnce({}) // HeadBucket (bucket exists, owned by us)
         .mockResolvedValueOnce({}) // PutObject
         .mockResolvedValueOnce({}) // CreateAppVersion
@@ -897,6 +899,22 @@ describe('Main Functions', () => {
       expect(mockedCore.setOutput).toHaveBeenCalledWith('environment-id', 'e-new');
       expect(mockedCore.setOutput).toHaveBeenCalledWith('deployment-action-type', 'create');
       expect(mockedCore.setOutput).toHaveBeenCalledWith('version-label', 'v1.0.0');
+    });
+
+    it('fails before packaging or uploading when the label exists and use-existing-application-version-if-available is false', async () => {
+      // getBooleanInput returns false for the reuse input in this suite, matching the action default
+      mockSend
+        .mockResolvedValueOnce({ Account: '123456789012' })
+        .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green', Tier: { Name: 'WebServer' } }] })
+        .mockResolvedValueOnce({ ApplicationVersions: [{ VersionLabel: 'v1.0.0', SourceBundle: { S3Bucket: 'my-bucket', S3Key: 'my-app/v1.0.0.zip' } }] }); // label taken
+
+      await run();
+
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining("Application version 'v1.0.0' already exists and use-existing-application-version-if-available is false"));
+      const archiver = require('archiver');
+      expect(archiver).not.toHaveBeenCalled();
+      expect(mockSend).toHaveBeenCalledTimes(3); // no HeadBucket, PutObject, CreateApplicationVersion, or UpdateEnvironment
+      expect(createVersionInputs()).toHaveLength(0);
     });
 
     it('should reuse existing version when use-existing-application-version-if-available is true', async () => {
@@ -919,15 +937,19 @@ describe('Main Functions', () => {
 
       await run();
 
+      // Nothing is packaged for a reused version: there is no bundle to upload.
+      const archiver = require('archiver');
+      expect(archiver).not.toHaveBeenCalled();
       expect(mockedCore.setOutput).toHaveBeenCalledWith('deployment-action-type', 'update');
       expect(mockedCore.setOutput).toHaveBeenCalledWith('version-label', 'v1.0.0');
     });
 
-    // STS -> DescribeEnvs -> HeadBucket -> PutObject -> CreateAppVersion -> DescribeEnvs (fresh) -> UpdateEnv -> GetEnvInfo
+    // STS -> DescribeEnvs -> DescribeAppVersions (label free) -> HeadBucket -> PutObject -> CreateAppVersion -> DescribeEnvs (fresh) -> UpdateEnv -> GetEnvInfo
     function mockStandardUpdateFlow() {
       mockSend
         .mockResolvedValueOnce({ Account: '123456789012' })
         .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green', Tier: { Name: 'WebServer' } }] })
+        .mockResolvedValueOnce({ ApplicationVersions: [] }) // DescribeApplicationVersions (label free)
         .mockResolvedValueOnce({}) // HeadBucket
         .mockResolvedValueOnce({}) // PutObject
         .mockResolvedValueOnce({}) // CreateAppVersion
@@ -1061,6 +1083,7 @@ describe('Main Functions', () => {
       mockSend
         .mockResolvedValueOnce({ Account: '123456789012' })
         .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green', Tier: { Name: 'WebServer' } }] })
+        .mockResolvedValueOnce({ ApplicationVersions: [] }) // DescribeApplicationVersions (label free)
         .mockResolvedValueOnce({}) // HeadBucket
         .mockResolvedValueOnce({}) // PutObject
         .mockResolvedValueOnce({}) // CreateAppVersion
@@ -1537,6 +1560,34 @@ describe('Main Functions', () => {
 
       expect(createVersionInputs()).toHaveLength(1);
       expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('Image build failed'));
+    });
+
+    it('should fail before packaging in build-configuration mode when the label exists and reuse is off', async () => {
+      useClusterInputs({ 'build-configuration': BUILD_CONFIG }, false);
+      mockSend
+        .mockResolvedValueOnce({ Account: '123456789012' })
+        .mockResolvedValueOnce(clusterEnv)
+        .mockResolvedValueOnce({ ApplicationVersions: [{ VersionLabel: 'v1.0.0', Status: 'PROCESSED' }] }); // label taken
+
+      await run();
+
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('already exists and use-existing-application-version-if-available is false'));
+      expect(require('archiver')).not.toHaveBeenCalled();
+      expect(mockSend).toHaveBeenCalledTimes(3);
+    });
+
+    it('should fail before creating anything in BYOI mode when the label exists and reuse is off', async () => {
+      useClusterInputs({ 'image-uri': '123456789012.dkr.ecr.us-east-1.amazonaws.com/app:v1' }, false);
+      mockSend
+        .mockResolvedValueOnce({ Account: '123456789012' })
+        .mockResolvedValueOnce(clusterEnv)
+        .mockResolvedValueOnce({ ApplicationVersions: [{ VersionLabel: 'v1.0.0', Status: 'PROCESSED' }] }); // label taken
+
+      await run();
+
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('already exists and use-existing-application-version-if-available is false'));
+      expect(createVersionInputs()).toHaveLength(0);
+      expect(mockSend).toHaveBeenCalledTimes(3);
     });
 
     it('should reuse an existing version in build-configuration mode and skip packaging and the image build', async () => {

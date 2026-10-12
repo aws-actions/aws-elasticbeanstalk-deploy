@@ -176,9 +176,10 @@ export async function run(): Promise<void> {
       // Same reuse semantics as the Beanstalk Standard path: a version label can't be recreated,
       // so if one already exists under this label it is deployed as-is — unless its image build
       // FAILED (undeployable) or is still running (wait for it).
-      const existing = useExistingApplicationVersionIfAvailable
-        ? await getApplicationVersionInfo(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay)
-        : { exists: false };
+      const existing = await getApplicationVersionInfo(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay);
+      if (existing.exists && !useExistingApplicationVersionIfAvailable) {
+        throw existingLabelError(applicationVersionLabel);
+      }
       if (existing.exists) {
         core.startGroup('♻️  Reusing existing version');
         await ensureReusableClusterVersion(clients, applicationName, applicationVersionLabel, existing.status, existing.buildTimeoutMinutes ?? DEFAULT_IMAGE_BUILD_TIMEOUT_MINUTES, maskIdentifiers);
@@ -220,9 +221,13 @@ export async function run(): Promise<void> {
       // Same reuse semantics as the Beanstalk Standard path: a version label can't be recreated,
       // so if one already exists under this label it is deployed as-is (no packaging, upload, or
       // build) — unless its build FAILED (undeployable) or is still running (wait for it).
-      const existing = useExistingApplicationVersionIfAvailable
-        ? await getApplicationVersionInfo(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay)
-        : { exists: false };
+      // Always look the label up first: with reuse off, an existing label must fail here, before
+      // this run packages, uploads to the deterministic S3 key (overwriting that version's bundle),
+      // and only then has CreateApplicationVersion reject the duplicate.
+      const existing = await getApplicationVersionInfo(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay);
+      if (existing.exists && !useExistingApplicationVersionIfAvailable) {
+        throw existingLabelError(applicationVersionLabel);
+      }
 
       if (existing.exists) {
         core.startGroup('♻️  Reusing existing version');
@@ -273,22 +278,30 @@ export async function run(): Promise<void> {
         core.endGroup();
       }
     } else {
-      // Classic EB: package → S3 → CreateApplicationVersion
-      core.startGroup('📦 Creating deployment package');
-      const { path: packagePath } = await createDeploymentPackage(
-        deploymentPackagePath,
-        applicationVersionLabel,
-        excludePatterns,
-        sourceDirectory,
-        symlinks
-      );
-      core.endGroup();
+      // Classic EB: check the label → package → S3 → CreateApplicationVersion
+      // The label is looked up before anything is packaged, as in the Cluster paths: with reuse
+      // off, an existing label fails here, before this run builds a zip, uploads to the
+      // deterministic S3 key (overwriting that version's bundle), and only then has
+      // CreateApplicationVersion reject the duplicate.
+      const versionExists = await applicationVersionExists(clients, applicationName, applicationVersionLabel);
+      if (versionExists && !useExistingApplicationVersionIfAvailable) {
+        throw existingLabelError(applicationVersionLabel);
+      }
 
       let bucket: string;
       let key: string;
-      const shouldCreateNewApplicationVersion = !useExistingApplicationVersionIfAvailable || !(await applicationVersionExists(clients, applicationName, applicationVersionLabel));
 
-      if (shouldCreateNewApplicationVersion) {
+      if (!versionExists) {
+        core.startGroup('📦 Creating deployment package');
+        const { path: packagePath } = await createDeploymentPackage(
+          deploymentPackagePath,
+          applicationVersionLabel,
+          excludePatterns,
+          sourceDirectory,
+          symlinks
+        );
+        core.endGroup();
+
         core.startGroup('☁️  Uploading to S3');
         const uploadResult = await uploadToS3(
           clients,
@@ -515,6 +528,19 @@ async function ensureReusableClusterVersion(
  * user gets a clear failure instead of UpdateEnvironment rejecting the version and the label being
  * consumed by an undeployable version.
  */
+/**
+ * An existing label with use-existing-application-version-if-available off. Raised before any
+ * packaging or upload so the existing version's bundle is left untouched; the service would reject
+ * CreateApplicationVersion anyway, since a label cannot be recreated.
+ */
+function existingLabelError(versionLabel: string): Error {
+  return new Error(
+    `Application version '${versionLabel}' already exists and use-existing-application-version-if-available is false. ` +
+    'Use a new version-label (the default, the commit SHA, changes on every commit), delete the existing version, or ' +
+    'set use-existing-application-version-if-available to true to deploy the existing version as-is.'
+  );
+}
+
 async function assertVersionHasImage(
   clients: AWSClients,
   applicationName: string,

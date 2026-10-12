@@ -21,6 +21,7 @@ A GitHub Action for deploying applications to AWS Elastic Beanstalk with automat
   - [Option B: Build the Image From Source](#option-b-build-the-image-from-source)
   - [What Changes Compared to Beanstalk Standard](#what-changes-compared-to-beanstalk-standard)
 - [Versioning](#versioning)
+- [Reusing an Existing Version](#reusing-an-existing-version)
 - [Inputs](#inputs)
 - [Outputs](#outputs)
 - [Examples](#examples)
@@ -37,7 +38,7 @@ A GitHub Action for deploying applications to AWS Elastic Beanstalk with automat
 - **Health Monitoring**: Waits for deployment completion and environment health recovery
 - **Event Streaming**: Displays real-time deployment events in GitHub Actions logs
 - **Intelligent Retries**: Exponential backoff for transient API failures
-- **Version Reuse**: Optionally skip S3 upload if version already exists
+- **Version Reuse**: Optionally deploy an application version that already exists under the label, to promote one version across environments
 
 ## Choose Your Deployment Mode
 
@@ -418,7 +419,7 @@ See [cluster/prebuilt-image.yml](examples/cluster/prebuilt-image.yml) for the co
 
 Make sure the image is pushed before this action runs, and that the environment's node role can pull from your registry. After creating the version, the action confirms the service recorded the image and logs its URI before deploying.
 
-If an application version with the same `version-label` already exists and `use-existing-application-version-if-available` is `true` (the default), the action deploys that version as-is and skips version creation — the same behavior as Beanstalk Standard, so it may point at a different image than `image-uri`. The one exception is a version whose image build `FAILED`, which can never deploy: the action fails immediately and asks for a new label. Elastic Beanstalk does not allow a label to be recreated, so to deploy a new image use a new `version-label` (the default, the commit SHA, changes on every commit).
+If an application version with the same `version-label` already exists, the run fails before creating anything unless `use-existing-application-version-if-available` is `true`. With it on, the action deploys that version as-is and skips version creation — the same behavior as Beanstalk Standard, so it may point at a different image than `image-uri`. The one exception is a version whose image build `FAILED`, which can never deploy: the action fails immediately and asks for a new label. Elastic Beanstalk does not allow a label to be recreated, so to deploy a new image use a new `version-label` (the default, the commit SHA, changes on every commit). See [Reusing an Existing Version](#reusing-an-existing-version).
 
 ### Option B: Build the Image From Source
 
@@ -473,7 +474,7 @@ See [cluster/build-from-source.yml](examples/cluster/build-from-source.yml) for 
 
 Because this path uploads a source bundle, it needs the same [S3 permissions](#step-2-attach-required-permissions) as Beanstalk Standard. The `CodeBuildServiceRole` also needs permission to pull the source from S3 and push the built image to your registry.
 
-If an application version with the same `version-label` already exists and `use-existing-application-version-if-available` is `true` (the default), the action deploys that version as-is and skips packaging, the S3 upload, and the build — the same behavior as Beanstalk Standard. If that version's build is still running (for example a concurrent run of the same commit), the action waits for it to finish; if its build `FAILED`, the action fails immediately with a message asking for a new `version-label`, since the label cannot be recreated.
+If an application version with the same `version-label` already exists, the run fails before packaging unless `use-existing-application-version-if-available` is `true`. With it on, the action deploys that version as-is and skips packaging, the S3 upload, and the build — the same behavior as Beanstalk Standard. If that version's build is still running (for example a concurrent run of the same commit), the action waits for it to finish; if its build `FAILED`, the action fails immediately with a message asking for a new `version-label`, since the label cannot be recreated. See [Reusing an Existing Version](#reusing-an-existing-version).
 
 > [!NOTE]
 > The action waits for the image build for as long as the service's own build timeout, `TimeoutInMinutes` (default 60 minutes), plus a short grace period. `deployment-timeout` does not apply to the build; it bounds each of the three phases around it: the wait for an existing environment to become `Ready`, the deployment, and health recovery. Make sure your AWS session outlives the build: `configure-aws-credentials` issues OIDC credentials for one hour by default, so for long builds set its `role-duration-seconds` above `TimeoutInMinutes` plus the deployment time, otherwise the run fails after the build with an expired-credentials error.
@@ -484,8 +485,8 @@ If an application version with the same `version-label` already exists and `use-
 |----------|-----|------------|
 | Platform input | `solution-stack-name` or `platform-arn` | `image-uri` or `build-configuration` |
 | Required option settings | `IamInstanceProfile`, `ServiceRole` | `cluster-role`, `node-role`, `observability-role` |
-| Source packaging and S3 upload | Every run packages; upload is skipped when the version is reused | Only with `build-configuration` (both skipped when the version is reused); never with `image-uri` |
-| Reusing an existing version (`use-existing-application-version-if-available`) | Any version under the label is reused | Same, except a version whose image build `FAILED` fails the run immediately, and one still `BUILDING` is waited for |
+| Source packaging and S3 upload | Skipped when the version is reused | Only with `build-configuration` (skipped when the version is reused); never with `image-uri` |
+| Reusing an existing version (`use-existing-application-version-if-available`, off by default) | Any version under the label is reused | Same, except a version whose image build `FAILED` fails the run immediately, and one still `BUILDING` is waited for |
 | Before deploying to an existing environment | The environment's tier is checked first; `image-uri`/`build-configuration` against a Standard environment, or an unreadable tier, fail before anything is packaged or created | The environment's tier is checked first; a source-bundle deployment against a Cluster environment, or an unreadable tier, fail before anything is packaged or created |
 
 Inputs that apply the same way in both modes include `version-label`, `create-environment-if-not-exists`, `create-application-if-not-exists`, `wait-for-deployment`, `wait-for-environment-recovery`, `deployment-timeout`, `max-retries`, `retry-delay`, and `cname-prefix`. The packaging inputs (`source-directory`, `exclude-patterns`, `symlinks`, `deployment-package-path`) apply to `build-configuration` but are ignored with `image-uri`, which never packages source.
@@ -517,6 +518,15 @@ Examples:
 ```
 
 Every release is signed with a [SLSA build provenance attestation](https://slsa.dev/spec/v1.0/provenance) and can be verified with the GitHub CLI. See the release notes on each release for verification instructions.
+
+## Reusing an Existing Version
+
+Elastic Beanstalk application version labels are unique per application and cannot be recreated. By default the action creates a new version on every run. It looks the label up before packaging anything, and a label that already exists fails the run at that point, so nothing is built or uploaded. Use a new `version-label` (the default, the commit SHA, changes on every commit) or delete the existing version.
+
+Set `use-existing-application-version-if-available: true` when you deploy one version to multiple environments, for example dev, staging, and production from the same commit in one workflow, or when re-running a deployment of a commit whose version was already created.
+
+> [!NOTE]
+> With reuse on, the action deploys the application version that already exists under the label as-is, without further checks, and skips packaging, the S3 upload, and version creation. If you need the label to be specific to your workflow, set `version-label` to a value your workflow produces.
 
 ## Inputs
 
@@ -555,7 +565,7 @@ See [Platform Configuration](#platform-configuration) and [Beanstalk Cluster Env
 | `deployment-timeout` | Maximum wait time **per wait phase** (seconds, 60-3600): waiting for an existing environment to become `Ready`, the deployment (`wait-for-deployment`), and health recovery (`wait-for-environment-recovery`). With both waits enabled the total maximum wait is 3× this value. | `900` (Beanstalk Standard), `2400` (Beanstalk Cluster) |
 | `max-retries` | Maximum retry attempts for failed API calls (0-10) | `2` |
 | `retry-delay` | Initial delay between retries in seconds (1-60, uses exponential backoff) | `5` |
-| `use-existing-application-version-if-available` | Reuse existing application version if it exists (skips S3 upload, version creation, and — for `build-configuration` — the image build) | `true` |
+| `use-existing-application-version-if-available` | Deploy the application version that already exists under `version-label` as-is instead of failing (skips packaging, the S3 upload, version creation, and — for `build-configuration` — the image build). See [Reusing an Existing Version](#reusing-an-existing-version) | `false` |
 | `create-s3-bucket-if-not-exists` | Create S3 bucket if it doesn't exist | `true` |
 | `s3-bucket-name` | Custom S3 bucket name for deployment packages | `elasticbeanstalk-{region}-{accountId}` |
 | `exclude-patterns` | Comma-separated patterns to exclude from auto-created packages. Uses **gitignore pattern syntax** — a bare name like `node_modules` or `*.log` matches at any depth, `dir/` matches directories only, and `!pattern` re-includes. | None |
@@ -635,6 +645,10 @@ You passed `image-uri` or `build-configuration` against an existing Beanstalk St
 **"Application version … already exists but its image build FAILED"**
 
 The label is held by a version whose image build failed, so it can never deploy. Elastic Beanstalk does not allow a label to be recreated, so either set a new `version-label` or delete the existing application version and re-run (`DeleteApplicationVersion` is rejected while a build is still `BUILDING`).
+
+**"Application version … already exists and use-existing-application-version-if-available is false"**
+
+A version with this `version-label` already exists, so the action stopped before packaging or uploading anything. Use a new `version-label`, delete the existing version, or, if you are deploying one version to multiple environments or re-running a deployment of the same commit, set `use-existing-application-version-if-available: true`. See [Reusing an Existing Version](#reusing-an-existing-version).
 
 **`UpdateEnvironment` rejects the application version as not compatible with the environment**
 

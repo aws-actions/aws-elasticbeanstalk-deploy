@@ -52,9 +52,9 @@ inputs:
     required: false
     default: '5'
   use-existing-application-version-if-available:
-    description: 'Reuse existing application version if it already exists'
+    description: 'Deploy the application version that already exists under version-label instead of failing. Off by default: an existing label fails the run before anything is packaged or uploaded. Turn on to promote one version across environments.'
     required: false
-    default: 'true'
+    default: 'false'
   create-s3-bucket-if-not-exists:
     description: 'Create S3 bucket if it does not exist'
     required: false
