@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
-### Unreleased
+### <a name="1.1.1" href="https://github.com/aws-actions/aws-elasticbeanstalk-deploy/tree/v1.1.1">1.1.1</a>
 
 #### Behavior changes
 
