@@ -917,6 +917,46 @@ describe('Main Functions', () => {
       expect(createVersionInputs()).toHaveLength(0);
     });
 
+    it('creates a new version when use-existing-application-version-if-available is true but the label is free', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'use-existing-application-version-if-available') return true;
+        return false;
+      });
+      mockStandardUpdateFlow();
+
+      await run();
+
+      expect(mockedCore.setFailed).not.toHaveBeenCalled();
+      expect(createVersionInputs()).toHaveLength(1);
+      expect(mockedCore.setOutput).toHaveBeenCalledWith('deployment-action-type', 'update');
+    });
+
+    it('fails the run without packaging when the label lookup itself fails', async () => {
+      // The lookup is retried (max-retries is 3 in this suite) and then fails the run: an
+      // unanswerable "does this label exist" must not be treated as "label free".
+      mockedCore.getInput.mockImplementation((name: string) => {
+        const inputs: Record<string, string> = {
+          'aws-region': 'us-east-1', 'application-name': 'test-app', 'environment-name': 'test-env',
+          'solution-stack-name': '64bit Amazon Linux 2', 'version-label': 'v1.0.0',
+          'deployment-timeout': '900', 'max-retries': '1', 'retry-delay': '1', 'exclude-patterns': '*.git*',
+        };
+        return inputs[name] || '';
+      });
+      mockSend
+        .mockResolvedValueOnce({ Account: '123456789012' })
+        .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green', Tier: { Name: 'WebServer' } }] })
+        .mockRejectedValueOnce(new Error('Throttling')) // DescribeApplicationVersions attempt 1
+        .mockRejectedValueOnce(new Error('Throttling')); // DescribeApplicationVersions attempt 2 (max-retries 1)
+
+      await run();
+
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('Describe application version failed after 2 attempts'));
+      expect(require('archiver')).not.toHaveBeenCalled();
+      expect(createVersionInputs()).toHaveLength(0);
+      expect(mockSend).toHaveBeenCalledTimes(4); // no HeadBucket/PutObject
+    }, 20000);
+
     it('should reuse existing version when use-existing-application-version-if-available is true', async () => {
       mockedCore.getBooleanInput.mockImplementation((name: string) => {
         if (name === 'create-s3-bucket-if-not-exists') return true;

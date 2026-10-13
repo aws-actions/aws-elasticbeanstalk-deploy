@@ -526,7 +526,7 @@ Elastic Beanstalk application version labels are unique per application and cann
 Set `use-existing-application-version-if-available: true` when you deploy one version to multiple environments, for example dev, staging, and production from the same commit in one workflow, or when re-running a deployment of a commit whose version was already created.
 
 > [!NOTE]
-> With reuse on, the action deploys the application version that already exists under the label as-is, without further checks, and skips packaging, the S3 upload, and version creation. If you need the label to be specific to your workflow, set `version-label` to a value your workflow produces.
+> With reuse on, the action deploys the application version that already exists under the label as-is, without comparing it to the current source, and skips packaging, the S3 upload, and version creation. If you need the label to be specific to your workflow, set `version-label` to a value your workflow produces.
 
 ## Inputs
 

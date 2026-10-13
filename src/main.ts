@@ -5,7 +5,6 @@ import { AWSClients } from './aws-clients';
 import { createDeploymentPackage } from './deploymentpackage';
 import {
   getAwsAccountId,
-  applicationVersionExists,
   getApplicationVersionStatus,
   getApplicationVersionInfo,
   getVersionS3Location,
@@ -174,8 +173,8 @@ export async function run(): Promise<void> {
       // The application is created through AutoCreateApplication on CreateApplicationVersion,
       // exactly like the Beanstalk Standard path.
       // Same reuse semantics as the Beanstalk Standard path: a version label can't be recreated,
-      // so if one already exists under this label it is deployed as-is — unless its image build
-      // FAILED (undeployable) or is still running (wait for it).
+      // so with reuse off an existing label fails the run, and with reuse on it is deployed as-is —
+      // unless its image build FAILED (undeployable) or is still running (wait for it).
       const existing = await getApplicationVersionInfo(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay);
       if (existing.exists && !useExistingApplicationVersionIfAvailable) {
         throw existingLabelError(applicationVersionLabel);
@@ -283,15 +282,17 @@ export async function run(): Promise<void> {
       // off, an existing label fails here, before this run builds a zip, uploads to the
       // deterministic S3 key (overwriting that version's bundle), and only then has
       // CreateApplicationVersion reject the duplicate.
-      const versionExists = await applicationVersionExists(clients, applicationName, applicationVersionLabel);
-      if (versionExists && !useExistingApplicationVersionIfAvailable) {
+      // getApplicationVersionInfo retries and then throws, so a lookup that cannot be completed fails
+      // the run here rather than being treated as "label free".
+      const existing = await getApplicationVersionInfo(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay);
+      if (existing.exists && !useExistingApplicationVersionIfAvailable) {
         throw existingLabelError(applicationVersionLabel);
       }
 
       let bucket: string;
       let key: string;
 
-      if (!versionExists) {
+      if (!existing.exists) {
         core.startGroup('📦 Creating deployment package');
         const { path: packagePath } = await createDeploymentPackage(
           deploymentPackagePath,
@@ -523,12 +524,6 @@ async function ensureReusableClusterVersion(
 }
 
 /**
- * Confirm a Beanstalk Cluster application version actually carries an image before deploying it,
- * and log the image URI (digest-pinned for built images). Throws with `reason` otherwise, so the
- * user gets a clear failure instead of UpdateEnvironment rejecting the version and the label being
- * consumed by an undeployable version.
- */
-/**
  * An existing label with use-existing-application-version-if-available off. Raised before any
  * packaging or upload so the existing version's bundle is left untouched; the service would reject
  * CreateApplicationVersion anyway, since a label cannot be recreated.
@@ -536,11 +531,17 @@ async function ensureReusableClusterVersion(
 function existingLabelError(versionLabel: string): Error {
   return new Error(
     `Application version '${versionLabel}' already exists and use-existing-application-version-if-available is false. ` +
-    'Use a new version-label (the default, the commit SHA, changes on every commit), delete the existing version, or ' +
-    'set use-existing-application-version-if-available to true to deploy the existing version as-is.'
+    'Re-run with a new version-label, delete the existing version, or set ' +
+    'use-existing-application-version-if-available to true to deploy the existing version as-is.'
   );
 }
 
+/**
+ * Confirm a Beanstalk Cluster application version actually carries an image before deploying it,
+ * and log the image URI (digest-pinned for built images). Throws with `reason` otherwise, so the
+ * user gets a clear failure instead of UpdateEnvironment rejecting the version and the label being
+ * consumed by an undeployable version.
+ */
 async function assertVersionHasImage(
   clients: AWSClients,
   applicationName: string,
