@@ -168,17 +168,16 @@ export async function run(): Promise<void> {
       }
     }
 
+    // Labels can't be recreated, and a failed lookup must not read as "free".
+    const existing = await getApplicationVersionInfo(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay);
+    if (existing.exists && !useExistingApplicationVersionIfAvailable) {
+      throw existingLabelError(applicationVersionLabel);
+    }
+
     if (imageUri) {
       // Beanstalk Cluster BYOI: skip packaging/S3, create the application version from ImageConfiguration.Source.
       // The application is created through AutoCreateApplication on CreateApplicationVersion,
       // exactly like the Beanstalk Standard path.
-      // Same reuse semantics as the Beanstalk Standard path: a version label can't be recreated,
-      // so with reuse off an existing label fails the run, and with reuse on it is deployed as-is —
-      // unless its image build FAILED (undeployable) or is still running (wait for it).
-      const existing = await getApplicationVersionInfo(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay);
-      if (existing.exists && !useExistingApplicationVersionIfAvailable) {
-        throw existingLabelError(applicationVersionLabel);
-      }
       if (existing.exists) {
         core.startGroup('♻️  Reusing existing version');
         await ensureReusableClusterVersion(clients, applicationName, applicationVersionLabel, existing.status, existing.buildTimeoutMinutes ?? DEFAULT_IMAGE_BUILD_TIMEOUT_MINUTES, maskIdentifiers);
@@ -216,17 +215,6 @@ export async function run(): Promise<void> {
       const buildTimeoutMinutes = Number.isFinite(requestedTimeout) && requestedTimeout > 0
         ? requestedTimeout
         : DEFAULT_IMAGE_BUILD_TIMEOUT_MINUTES;
-
-      // Same reuse semantics as the Beanstalk Standard path: a version label can't be recreated,
-      // so if one already exists under this label it is deployed as-is (no packaging, upload, or
-      // build) — unless its build FAILED (undeployable) or is still running (wait for it).
-      // Always look the label up first: with reuse off, an existing label must fail here, before
-      // this run packages, uploads to the deterministic S3 key (overwriting that version's bundle),
-      // and only then has CreateApplicationVersion reject the duplicate.
-      const existing = await getApplicationVersionInfo(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay);
-      if (existing.exists && !useExistingApplicationVersionIfAvailable) {
-        throw existingLabelError(applicationVersionLabel);
-      }
 
       if (existing.exists) {
         core.startGroup('♻️  Reusing existing version');
@@ -277,18 +265,6 @@ export async function run(): Promise<void> {
         core.endGroup();
       }
     } else {
-      // Classic EB: check the label → package → S3 → CreateApplicationVersion
-      // The label is looked up before anything is packaged, as in the Cluster paths: with reuse
-      // off, an existing label fails here, before this run builds a zip, uploads to the
-      // deterministic S3 key (overwriting that version's bundle), and only then has
-      // CreateApplicationVersion reject the duplicate.
-      // getApplicationVersionInfo retries and then throws, so a lookup that cannot be completed fails
-      // the run here rather than being treated as "label free".
-      const existing = await getApplicationVersionInfo(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay);
-      if (existing.exists && !useExistingApplicationVersionIfAvailable) {
-        throw existingLabelError(applicationVersionLabel);
-      }
-
       let bucket: string;
       let key: string;
 
@@ -523,11 +499,6 @@ async function ensureReusableClusterVersion(
   }
 }
 
-/**
- * An existing label with use-existing-application-version-if-available off. Raised before any
- * packaging or upload so the existing version's bundle is left untouched; the service would reject
- * CreateApplicationVersion anyway, since a label cannot be recreated.
- */
 function existingLabelError(versionLabel: string): Error {
   return new Error(
     `Application version '${versionLabel}' already exists and use-existing-application-version-if-available is false. ` +

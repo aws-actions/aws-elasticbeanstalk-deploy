@@ -282,22 +282,6 @@ export async function getAwsAccountId(
 }
 
 /**
- * Check if an application version exists
- */
-export async function applicationVersionExists(
-  clients: AWSClients,
-  applicationName: string,
-  versionLabel: string
-): Promise<boolean> {
-  try {
-    return (await getApplicationVersionInfo(clients, applicationName, versionLabel)).exists;
-  } catch (error) {
-    core.debug(`Error checking application version ${versionLabel} existence: ${error}`);
-    return false;
-  }
-}
-
-/**
  * Get the processing status of an application version (UNPROCESSED, BUILDING while an image builds, PROCESSED, FAILED).
  * Used to poll a Beanstalk Cluster image build to completion.
  */
@@ -313,7 +297,7 @@ export async function getApplicationVersionStatus(
 
 /**
  * Describe an application version: the single DescribeApplicationVersions call behind
- * applicationVersionExists and getApplicationVersionStatus.
+ * getApplicationVersionStatus and the label lookup in main.
  */
 export async function getApplicationVersionInfo(
   clients: AWSClients,

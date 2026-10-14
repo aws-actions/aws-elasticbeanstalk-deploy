@@ -964,7 +964,7 @@ describe('Main Functions', () => {
         return false;
       });
 
-      // Mock sequence: STS -> DescribeEnvs -> applicationVersionExists (true) -> getVersionS3Location -> DescribeEnvs (fresh) -> UpdateEnv -> GetEnvInfo
+      // Mock sequence: STS -> DescribeEnvs -> DescribeAppVersions (exists) -> getVersionS3Location -> DescribeEnvs (fresh) -> UpdateEnv -> GetEnvInfo
       // No S3 calls since version already exists
       mockSend
         .mockResolvedValueOnce({ Account: '123456789012' })
@@ -1370,7 +1370,8 @@ describe('Main Functions', () => {
       useClusterInputs({ 'build-configuration': JSON.stringify(cfg) });
       mockSend
         .mockResolvedValueOnce({ Account: '123456789012' })
-        .mockResolvedValueOnce(clusterEnv);
+        .mockResolvedValueOnce(clusterEnv)
+        .mockResolvedValueOnce({ ApplicationVersions: [] }); // DescribeApplicationVersions (label free)
 
       await run();
 
@@ -1379,7 +1380,7 @@ describe('Main Functions', () => {
       const archiver = require('archiver');
       expect(archiver).not.toHaveBeenCalled();
       expect(createVersionInputs()).toHaveLength(0);
-      expect(mockSend).toHaveBeenCalledTimes(2);
+      expect(mockSend).toHaveBeenCalledTimes(3);
     });
 
     it('should accept a build-configuration that uses only modeled fields', async () => {

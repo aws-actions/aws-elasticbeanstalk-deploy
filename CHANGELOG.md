@@ -7,7 +7,11 @@ All notable changes to this project will be documented in this file. See [standa
 #### Behavior changes
 
 * `use-existing-application-version-if-available` now defaults to `false`. A `version-label` that already exists fails the run instead of deploying the existing version. Set the input to `true` to deploy one version to multiple environments or to re-run a deployment of a commit whose version already exists. Note that with it on, the action deploys the application version that exists under the label as-is, without comparing it to the current source. Workflows that relied on the previous default for those flows must now set the input explicitly.
-* The label is looked up before anything is packaged in every mode. An existing label with reuse off fails before packaging, and the Standard path no longer packages a bundle when reusing a version.
+* The label is looked up before anything is packaged in every mode, and the lookup must succeed. A `DescribeApplicationVersions` failure (including `AccessDenied`) now fails the run; previously the Standard path skipped the lookup with reuse off and ignored lookup errors with reuse on. Policies without `elasticbeanstalk:DescribeApplicationVersions` must add it. The Standard path no longer packages a bundle when reusing a version.
+
+#### Bug fixes
+
+* With reuse off and an existing label, the Standard path uploaded the new bundle to the existing version's S3 key before `CreateApplicationVersion` rejected the duplicate, replacing that version's bundle. The run now fails before upload and the existing bundle is left untouched.
 
 #### Features
 

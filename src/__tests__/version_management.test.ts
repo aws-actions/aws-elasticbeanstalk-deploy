@@ -1,4 +1,4 @@
-import { applicationVersionExists, getVersionS3Location, createApplicationVersion } from '../aws-operations';
+import { getVersionS3Location, createApplicationVersion } from '../aws-operations';
 import { AWSClients } from '../aws-clients';
 
 // Mock dependencies
@@ -29,44 +29,6 @@ describe('Version Management', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockClients = AWSClients.getInstance('us-east-1');
-  });
-
-  describe('applicationVersionExists', () => {
-    it('should return true if version exists', async () => {
-      mockSend.mockResolvedValue({
-        ApplicationVersions: [{ VersionLabel: 'v1.0.0' }],
-      });
-
-      const result = await applicationVersionExists(mockClients, 'my-app', 'v1.0.0');
-
-      expect(result).toBe(true);
-    });
-
-    it('should return false if version does not exist', async () => {
-      mockSend.mockResolvedValue({
-        ApplicationVersions: [],
-      });
-
-      const result = await applicationVersionExists(mockClients, 'my-app', 'v2.0.0');
-
-      expect(result).toBe(false);
-    });
-
-    it('should return false on error', async () => {
-      mockSend.mockRejectedValue(new Error('API Error'));
-
-      const result = await applicationVersionExists(mockClients, 'my-app', 'v1.0.0');
-
-      expect(result).toBe(false);
-    });
-
-    it('should handle empty response', async () => {
-      mockSend.mockResolvedValue({});
-
-      const result = await applicationVersionExists(mockClients, 'my-app', 'v1.0.0');
-
-      expect(result).toBe(false);
-    });
   });
 
   describe('getVersionS3Location', () => {
