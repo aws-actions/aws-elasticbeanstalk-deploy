@@ -976,6 +976,27 @@ describe('Main Functions', () => {
       expect(mockSend).toHaveBeenCalledTimes(5); // no CreateApplicationVersion, no UpdateEnvironment
     });
 
+    it('with reuse on and an empty lookup, the conditional upload still refuses an existing object', async () => {
+      mockedCore.getBooleanInput.mockImplementation((name: string) => {
+        if (name === 'create-s3-bucket-if-not-exists') return true;
+        if (name === 'use-existing-application-version-if-available') return true;
+        return false;
+      });
+      const precondition = Object.assign(new Error('precondition'), { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } });
+      mockSend
+        .mockResolvedValueOnce({ Account: '123456789012' })
+        .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green', Tier: { Name: 'WebServer' } }] })
+        .mockResolvedValueOnce({ ApplicationVersions: [] }) // lookup: empty (unauthorized caller)
+        .mockResolvedValueOnce({}) // HeadBucket
+        .mockRejectedValueOnce(precondition); // PutObject
+
+      await run();
+
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('An object already exists at s3://'));
+      expect(createVersionInputs()).toHaveLength(0);
+      expect(mockSend).toHaveBeenCalledTimes(5);
+    });
+
     it('should reuse existing version when use-existing-application-version-if-available is true', async () => {
       mockedCore.getBooleanInput.mockImplementation((name: string) => {
         if (name === 'create-s3-bucket-if-not-exists') return true;
@@ -1620,6 +1641,23 @@ describe('Main Functions', () => {
 
       expect(createVersionInputs()).toHaveLength(1);
       expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('Image build failed'));
+    });
+
+    it('refuses the upload in build-configuration mode when the lookup is empty but the S3 object exists', async () => {
+      useClusterInputs({ 'build-configuration': BUILD_CONFIG }, false);
+      const precondition = Object.assign(new Error('precondition'), { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } });
+      mockSend
+        .mockResolvedValueOnce({ Account: '123456789012' })
+        .mockResolvedValueOnce(clusterEnv)
+        .mockResolvedValueOnce({ ApplicationVersions: [] }) // lookup: empty
+        .mockResolvedValueOnce({}) // HeadBucket
+        .mockRejectedValueOnce(precondition); // PutObject
+
+      await run();
+
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('An object already exists at s3://'));
+      expect(createVersionInputs()).toHaveLength(0);
+      expect(mockSend).toHaveBeenCalledTimes(5); // no CreateApplicationVersion, no build poll
     });
 
     it('should fail before packaging in build-configuration mode when the label exists and reuse is off', async () => {

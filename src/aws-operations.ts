@@ -184,6 +184,11 @@ export const AWS_S3_REGIONS = [
 
 export type AWSS3Region = typeof AWS_S3_REGIONS[number];
 
+export function isObjectAlreadyExistsError(error: unknown): boolean {
+  const err = error as Error & { name?: string; $metadata?: { httpStatusCode?: number } };
+  return err?.name === 'PreconditionFailed' || err?.$metadata?.httpStatusCode === 412;
+}
+
 /**
  * Errors that retrying cannot fix: authorization/permission failures, expired or invalid
  * credentials, and deterministic Elastic Beanstalk rejections. Shared by retryWithBackoff and the
@@ -484,7 +489,6 @@ export async function uploadToS3(
         Key: key,
         Body: fs.createReadStream(packagePath),
         ContentLength: fileSizeBytes,
-        // Never overwrite.
         IfNoneMatch: '*',
       });
 
@@ -509,11 +513,6 @@ export async function uploadToS3(
 
   core.info('✅ Upload complete');
   return { bucket, key };
-}
-
-export function isObjectAlreadyExistsError(error: unknown): boolean {
-  const err = error as Error & { name?: string; $metadata?: { httpStatusCode?: number } };
-  return err?.name === 'PreconditionFailed' || err?.$metadata?.httpStatusCode === 412;
 }
 
 /**

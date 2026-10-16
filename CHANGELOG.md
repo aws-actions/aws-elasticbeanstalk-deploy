@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 #### Behavior changes
 
-* Correction to the 1.1.1 notes: a missing `elasticbeanstalk:DescribeApplicationVersions` permission does not fail the run. With it, an existing label is reported before packaging; without it, the run fails at the upload instead. The permission is recommended, not required.
+* Correction to the 1.1.1 notes: a missing `elasticbeanstalk:DescribeApplicationVersions` permission does not fail the run. With it, an existing label is reported before packaging. Without it, Standard and `build-configuration` runs fail at the upload and `image-uri` runs fail at `CreateApplicationVersion`, and `use-existing-application-version-if-available: true` cannot see the version to reuse it. The permission is required for reuse and recommended otherwise.
 * A run that uploads but fails before `CreateApplicationVersion` leaves its object in place; a re-run of the same label then fails at the upload. Delete the object or use a new label.
 
 ### <a name="1.1.1" href="https://github.com/aws-actions/aws-elasticbeanstalk-deploy/tree/v1.1.1">1.1.1</a>
@@ -18,7 +18,7 @@ All notable changes to this project will be documented in this file. See [standa
 #### Behavior changes
 
 * `use-existing-application-version-if-available` now defaults to `false`. A `version-label` that already exists fails the run instead of deploying the existing version. Set the input to `true` to deploy one version to multiple environments or to re-run a deployment of a commit whose version already exists. Note that with it on, the action deploys the application version that exists under the label as-is, without comparing it to the current source. Workflows that relied on the previous default for those flows must now set the input explicitly.
-* The label is looked up before anything is packaged in every mode, and the lookup must succeed. A `DescribeApplicationVersions` failure (including `AccessDenied`) now fails the run; previously the Standard path skipped the lookup with reuse off and ignored lookup errors with reuse on. Policies without `elasticbeanstalk:DescribeApplicationVersions` must add it. The Standard path no longer packages a bundle when reusing a version.
+* The label is looked up before anything is packaged in every mode, and the lookup must succeed. A `DescribeApplicationVersions` failure now fails the run; previously the Standard path skipped the lookup with reuse off and ignored lookup errors with reuse on. Policies without `elasticbeanstalk:DescribeApplicationVersions` must add it. The Standard path no longer packages a bundle when reusing a version.
 
 #### Bug fixes
 

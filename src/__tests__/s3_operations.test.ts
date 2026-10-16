@@ -297,6 +297,35 @@ describe('S3 Operations', () => {
       expect(mockSend).toHaveBeenCalledTimes(2); // 1 HeadBucket + 1 PutObject, no retries
     });
 
+    it('retries a 409 ConditionalRequestConflict and then fails on the 412', async () => {
+      const conflict = Object.assign(new Error('Conditional request conflict'), { name: 'ConditionalRequestConflict', $metadata: { httpStatusCode: 409 } });
+      const precondition = Object.assign(new Error('precondition'), { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } });
+      mockedFs.statSync.mockReturnValue({ size: 1024 } as any);
+      mockSend
+        .mockResolvedValueOnce({}) // HeadBucket
+        .mockRejectedValueOnce(conflict) // PutObject attempt 1: lost a concurrent conditional write
+        .mockRejectedValueOnce(precondition); // PutObject attempt 2: the winner's object now exists
+
+      await expect(uploadToS3(mockClients, 'us-east-1', '123456789012', 'my-app', 'v1.0.0', 'app.zip', 3, 0.001, false))
+        .rejects.toThrow(/An object already exists at s3:/);
+
+      expect(mockSend).toHaveBeenCalledTimes(3);
+    });
+
+    it('still refuses to overwrite when the bucket was just created (create-s3-bucket-if-not-exists)', async () => {
+      const precondition = Object.assign(new Error('precondition'), { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } });
+      mockedFs.statSync.mockReturnValue({ size: 1024 } as any);
+      mockSend
+        .mockResolvedValueOnce({}) // HeadBucket (exists, owned)
+        .mockRejectedValueOnce(precondition); // PutObject
+
+      await expect(uploadToS3(mockClients, 'us-east-1', '123456789012', 'my-app', 'v1.0.0', 'app.zip', 3, 1, true))
+        .rejects.toThrow(/An object already exists at s3:/);
+
+      const putInput = (PutObjectCommand as unknown as jest.Mock).mock.calls[0][0];
+      expect(putInput.IfNoneMatch).toBe('*');
+    });
+
     it('treats a 412 without a name as non-retryable too', () => {
       expect(isNonRetryableError(Object.assign(new Error('x'), { $metadata: { httpStatusCode: 412 } }))).toBe(true);
       expect(isNonRetryableError(new Error('An object already exists at s3://b/k, so the deployment package was not uploaded.'))).toBe(true);

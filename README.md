@@ -523,7 +523,7 @@ Every release is signed with a [SLSA build provenance attestation](https://slsa.
 
 Elastic Beanstalk application version labels are unique per application and cannot be recreated. By default the action creates a new version on every run. It looks the label up before packaging anything, and a label that already exists fails the run at that point, so nothing is built or uploaded. Use a new `version-label` (the default, the commit SHA, changes on every commit) or delete the existing version.
 
-The early check needs `elasticbeanstalk:DescribeApplicationVersions`; without it, Elastic Beanstalk returns an empty list rather than an error. The upload is conditional (`If-None-Match: *`) and never replaces an existing S3 object, so in that case the run fails at the upload with "An object already exists at s3://…" instead.
+The early check needs `elasticbeanstalk:DescribeApplicationVersions`; without it, Elastic Beanstalk returns an empty list rather than an error, so the action cannot see the existing version. The upload is conditional (`If-None-Match: *`) and never replaces an existing S3 object, so Beanstalk Standard and `build-configuration` runs then fail at the upload with "An object already exists at s3://…", and `image-uri` runs fail at `CreateApplicationVersion` with "Application Version … already exists". Reusing an existing version (below) requires the permission: without it the version is not visible and the run fails the same way.
 
 Set `use-existing-application-version-if-available: true` when you deploy one version to multiple environments, for example dev, staging, and production from the same commit in one workflow, or when re-running a deployment of a commit whose version was already created.
 
