@@ -957,6 +957,25 @@ describe('Main Functions', () => {
       expect(mockSend).toHaveBeenCalledTimes(4); // no HeadBucket/PutObject
     }, 20000);
 
+    it('refuses the upload when the label lookup returns empty but the S3 object exists', async () => {
+      // Describe returned [] (unauthorized caller), so only the conditional upload can refuse.
+      const precondition = Object.assign(new Error('At least one of the pre-conditions you specified did not hold'), {
+        name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 },
+      });
+      mockSend
+        .mockResolvedValueOnce({ Account: '123456789012' })
+        .mockResolvedValueOnce({ Environments: [{ Status: 'Ready', Health: 'Green', Tier: { Name: 'WebServer' } }] })
+        .mockResolvedValueOnce({ ApplicationVersions: [] }) // lookup: empty, not an error
+        .mockResolvedValueOnce({}) // HeadBucket
+        .mockRejectedValueOnce(precondition); // PutObject with IfNoneMatch
+
+      await run();
+
+      expect(mockedCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('An object already exists at s3://elasticbeanstalk-us-east-1-123456789012/test-app/v1.0.0.zip'));
+      expect(createVersionInputs()).toHaveLength(0);
+      expect(mockSend).toHaveBeenCalledTimes(5); // no CreateApplicationVersion, no UpdateEnvironment
+    });
+
     it('should reuse existing version when use-existing-application-version-if-available is true', async () => {
       mockedCore.getBooleanInput.mockImplementation((name: string) => {
         if (name === 'create-s3-bucket-if-not-exists') return true;

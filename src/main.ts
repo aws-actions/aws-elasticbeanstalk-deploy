@@ -168,7 +168,7 @@ export async function run(): Promise<void> {
       }
     }
 
-    // Labels can't be recreated, and a failed lookup must not read as "free".
+    // Advisory; an unauthorized describe returns an empty list, not an error.
     const existing = await getApplicationVersionInfo(clients, applicationName, applicationVersionLabel, maxRetries, retryDelay);
     if (existing.exists && !useExistingApplicationVersionIfAvailable) {
       throw existingLabelError(applicationVersionLabel);

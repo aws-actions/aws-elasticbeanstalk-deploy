@@ -60,7 +60,8 @@ jest.mock('@aws-sdk/client-sts', () => ({
 }));
 
 import * as fs from 'fs';
-import { uploadToS3, createS3Bucket } from '../aws-operations';
+import { uploadToS3, createS3Bucket, isNonRetryableError } from '../aws-operations';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 
 /** HeadBucket failure for a bucket that does not exist (S3 returns HTTP 404). */
 function notFoundError(): Error {
@@ -269,6 +270,39 @@ describe('S3 Operations', () => {
   });
 
   describe('uploadToS3 permissions errors', () => {
+    it('uploads with If-None-Match so an existing object is never replaced', async () => {
+      mockedFs.statSync.mockReturnValue({ size: 1024 } as any);
+      mockSend
+        .mockResolvedValueOnce({}) // HeadBucket
+        .mockResolvedValueOnce({}); // PutObject
+
+      await uploadToS3(mockClients, 'us-east-1', '123456789012', 'my-app', 'v1.0.0', 'app.zip', 3, 1, false);
+
+      const putInput = (PutObjectCommand as unknown as jest.Mock).mock.calls[0][0];
+      expect(putInput).toMatchObject({ Bucket: 'elasticbeanstalk-us-east-1-123456789012', Key: 'my-app/v1.0.0.zip', IfNoneMatch: '*' });
+    });
+
+    it('fails without retrying when the object already exists (HTTP 412), naming the key and the label', async () => {
+      const precondition = Object.assign(new Error('At least one of the pre-conditions you specified did not hold'), {
+        name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 },
+      });
+      mockedFs.statSync.mockReturnValue({ size: 1024 } as any);
+      mockSend
+        .mockResolvedValueOnce({}) // HeadBucket
+        .mockRejectedValueOnce(precondition); // PutObject
+
+      await expect(uploadToS3(mockClients, 'us-east-1', '123456789012', 'my-app', 'v1.0.0', 'app.zip', 3, 1, false))
+        .rejects.toThrow(/An object already exists at s3:\/\/elasticbeanstalk-us-east-1-123456789012\/my-app\/v1\.0\.0\.zip.*label 'v1\.0\.0'.*left over from an earlier run/s);
+
+      expect(mockSend).toHaveBeenCalledTimes(2); // 1 HeadBucket + 1 PutObject, no retries
+    });
+
+    it('treats a 412 without a name as non-retryable too', () => {
+      expect(isNonRetryableError(Object.assign(new Error('x'), { $metadata: { httpStatusCode: 412 } }))).toBe(true);
+      expect(isNonRetryableError(new Error('An object already exists at s3://b/k, so the deployment package was not uploaded.'))).toBe(true);
+      expect(isNonRetryableError(Object.assign(new Error('x'), { $metadata: { httpStatusCode: 500 } }))).toBe(false);
+    });
+
     it('should bubble up S3 upload permissions error without retrying', async () => {
       const uploadError = new Error('Access Denied');
       uploadError.name = 'AccessDenied';

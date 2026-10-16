@@ -219,7 +219,9 @@ export function isNonRetryableError(error: unknown): boolean {
     err?.name === 'InvalidParameterValueException' &&
     /does not exist or is not compatible with .* environments/i.test(message);
 
-  return err?.name === 'BucketCheckResult' || isAuthError || isCredentialError || isAppVersionExistsError || isIncompatibleVersionError;
+  const isObjectExistsError = isObjectAlreadyExistsError(err) || /an object already exists at s3:\/\//i.test(message);
+
+  return err?.name === 'BucketCheckResult' || isAuthError || isCredentialError || isAppVersionExistsError || isIncompatibleVersionError || isObjectExistsError;
 }
 
 /**
@@ -482,9 +484,23 @@ export async function uploadToS3(
         Key: key,
         Body: fs.createReadStream(packagePath),
         ContentLength: fileSizeBytes,
+        // Never overwrite.
+        IfNoneMatch: '*',
       });
 
-      await clients.getS3Client().send(command);
+      try {
+        await clients.getS3Client().send(command);
+      } catch (error) {
+        if (isObjectAlreadyExistsError(error)) {
+          throw new Error(
+            `An object already exists at s3://${bucket}/${key}, so the deployment package was not uploaded. ` +
+            `Usually an application version with label '${versionLabel}' already exists; it can also be left over ` +
+            'from an earlier run that uploaded but did not finish creating the version. Re-run with a new ' +
+            'version-label, or delete the existing version (and the object, if it is an orphan) and retry.'
+          );
+        }
+        throw error;
+      }
     },
     maxRetries,
     retryDelay,
@@ -493,6 +509,11 @@ export async function uploadToS3(
 
   core.info('✅ Upload complete');
   return { bucket, key };
+}
+
+export function isObjectAlreadyExistsError(error: unknown): boolean {
+  const err = error as Error & { name?: string; $metadata?: { httpStatusCode?: number } };
+  return err?.name === 'PreconditionFailed' || err?.$metadata?.httpStatusCode === 412;
 }
 
 /**

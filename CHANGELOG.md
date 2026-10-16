@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### <a name="1.1.2" href="https://github.com/aws-actions/aws-elasticbeanstalk-deploy/tree/v1.1.2">1.1.2</a>
+
+#### Bug fixes
+
+* The S3 upload is now conditional (`If-None-Match: *`) and never replaces an existing object. If the key is already taken, the run fails before `CreateApplicationVersion` with a message naming the key and the label. Previously, when the label lookup did not see an existing version (for example because the caller lacks `elasticbeanstalk:DescribeApplicationVersions`, which returns an empty list rather than an error), the Standard and `build-configuration` paths uploaded over that version's bundle.
+
+#### Behavior changes
+
+* Correction to the 1.1.1 notes: a missing `elasticbeanstalk:DescribeApplicationVersions` permission does not fail the run. With it, an existing label is reported before packaging; without it, the run fails at the upload instead. The permission is recommended, not required.
+* A run that uploads but fails before `CreateApplicationVersion` leaves its object in place; a re-run of the same label then fails at the upload. Delete the object or use a new label.
+
 ### <a name="1.1.1" href="https://github.com/aws-actions/aws-elasticbeanstalk-deploy/tree/v1.1.1">1.1.1</a>
 
 #### Behavior changes

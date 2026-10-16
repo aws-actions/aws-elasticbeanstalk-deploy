@@ -523,6 +523,8 @@ Every release is signed with a [SLSA build provenance attestation](https://slsa.
 
 Elastic Beanstalk application version labels are unique per application and cannot be recreated. By default the action creates a new version on every run. It looks the label up before packaging anything, and a label that already exists fails the run at that point, so nothing is built or uploaded. Use a new `version-label` (the default, the commit SHA, changes on every commit) or delete the existing version.
 
+The early check needs `elasticbeanstalk:DescribeApplicationVersions`; without it, Elastic Beanstalk returns an empty list rather than an error. The upload is conditional (`If-None-Match: *`) and never replaces an existing S3 object, so in that case the run fails at the upload with "An object already exists at s3://…" instead.
+
 Set `use-existing-application-version-if-available: true` when you deploy one version to multiple environments, for example dev, staging, and production from the same commit in one workflow, or when re-running a deployment of a commit whose version was already created.
 
 > [!NOTE]
@@ -645,6 +647,10 @@ You passed `image-uri` or `build-configuration` against an existing Beanstalk St
 **"Application version … already exists but its image build FAILED"**
 
 The label is held by a version whose image build failed, so it can never deploy. Elastic Beanstalk does not allow a label to be recreated, so either set a new `version-label` or delete the existing application version and re-run (`DeleteApplicationVersion` is rejected while a build is still `BUILDING`).
+
+**"An object already exists at s3://… so the deployment package was not uploaded"**
+
+An object already exists at the key this run would write to. Usually a version with this `version-label` exists and the caller lacks `elasticbeanstalk:DescribeApplicationVersions`, which would have reported it before packaging. It can also be left over from an earlier run of the same label that did not finish creating the version. Use a new `version-label`, or delete the existing version (and the object, if nothing references it) and re-run.
 
 **"Application version … already exists and use-existing-application-version-if-available is false"**
 
