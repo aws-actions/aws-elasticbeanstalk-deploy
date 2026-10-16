@@ -521,7 +521,7 @@ Every release is signed with a [SLSA build provenance attestation](https://slsa.
 
 ## Reusing an Existing Version
 
-Elastic Beanstalk application version labels are unique per application and cannot be recreated. By default the action creates a new version on every run. It looks the label up before packaging anything, and a label that already exists fails the run at that point, so nothing is built or uploaded. Use a new `version-label` (the default, the commit SHA, changes on every commit) or delete the existing version.
+Elastic Beanstalk application version labels are unique per application and cannot be recreated. By default the action creates a new version on every run. It looks the label up before packaging anything, and a label that already exists fails the run at that point, so nothing is built or uploaded. Use a new `version-label` (the default, the commit SHA, changes on every commit), or delete the existing version together with its source bundle (`DeleteSourceBundle=true`; the API default keeps the bundle, and a re-run then fails at the upload). See [Common Errors](#common-errors).
 
 The early check needs `elasticbeanstalk:DescribeApplicationVersions`; without it, Elastic Beanstalk returns an empty list rather than an error, so the action cannot see the existing version. The upload is conditional (`If-None-Match: *`) and never replaces an existing S3 object, so Beanstalk Standard and `build-configuration` runs then fail at the upload with "An object already exists at s3://…", and `image-uri` runs fail at `CreateApplicationVersion` with "Application Version … already exists". Reusing an existing version (below) requires the permission: without it the version is not visible and the run fails the same way.
 
@@ -646,19 +646,19 @@ You passed `image-uri` or `build-configuration` against an existing Beanstalk St
 
 **"Application version … already exists but its image build FAILED"**
 
-The label is held by a version whose image build failed, so it can never deploy. Elastic Beanstalk does not allow a label to be recreated, so either set a new `version-label` or delete the existing application version and re-run (`DeleteApplicationVersion` is rejected while a build is still `BUILDING`).
+The label is held by a version whose image build failed, so it can never deploy. Elastic Beanstalk does not allow a label to be recreated, so either set a new `version-label` or delete the existing application version together with its source bundle (`DeleteSourceBundle=true`) and re-run (`DeleteApplicationVersion` is rejected while a build is still `BUILDING`).
 
 **"An object already exists at s3://… so the deployment package was not uploaded"**
 
-An object already exists at the key this run would write to. Usually a version with this `version-label` exists and the caller lacks `elasticbeanstalk:DescribeApplicationVersions`, which would have reported it before packaging. It can also be left over from an earlier run of the same label that did not finish creating the version. Use a new `version-label`, or delete the existing version (and the object, if nothing references it) and re-run.
+An object already exists at the key this run would write to. Usually a version with this `version-label` exists and the caller lacks `elasticbeanstalk:DescribeApplicationVersions`, which would have reported it before packaging. It can also be left over from an earlier run of the same label that failed after uploading, or from deleting a version without its bundle (`DeleteApplicationVersion` keeps the bundle unless `DeleteSourceBundle=true`). Use a new `version-label`, or delete the version with `DeleteSourceBundle=true`, which removes both. A bare object with no version behind it must be deleted manually before re-running the same label; before 1.1.2 the re-run overwrote it.
 
 **"Application version … already exists and use-existing-application-version-if-available is false"**
 
-A version with this `version-label` already exists, so the action stopped before packaging or uploading anything. Use a new `version-label`, delete the existing version, or, if you are deploying one version to multiple environments or re-running a deployment of the same commit, set `use-existing-application-version-if-available: true`. See [Reusing an Existing Version](#reusing-an-existing-version).
+A version with this `version-label` already exists, so the action stopped before packaging or uploading anything. Use a new `version-label`, delete the existing version together with its source bundle (`DeleteSourceBundle=true`, otherwise the re-run fails at the upload), or, if you are deploying one version to multiple environments or re-running a deployment of the same commit, set `use-existing-application-version-if-available: true`. See [Reusing an Existing Version](#reusing-an-existing-version).
 
 **`UpdateEnvironment` rejects the application version as not compatible with the environment**
 
-The version under this label was created outside this action (or by a different tool) without an image, and `use-existing-application-version-if-available` reused it. The action checks reused versions for an image before deploying, so this usually indicates the check was bypassed by an in-flight change; set a new `version-label` or delete the existing version and re-run.
+The version under this label was created outside this action (or by a different tool) without an image, and `use-existing-application-version-if-available` reused it. The action checks reused versions for an image before deploying, so this usually indicates the check was bypassed by an in-flight change; set a new `version-label` or delete the existing version together with its source bundle (`DeleteSourceBundle=true`) and re-run.
 
 **`AccessDenied` from `CreateEnvironment` naming `iam:PassRole`, `iam:GetRole`, or `iam:CreateServiceLinkedRole`**
 

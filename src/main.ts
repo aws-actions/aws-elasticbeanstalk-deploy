@@ -490,7 +490,7 @@ async function ensureReusableClusterVersion(
   if (normalized === 'FAILED') {
     throw new Error(
       `Application version ${versionLabel} already exists but its image build FAILED, so it cannot be deployed, ` +
-      'and a new version cannot be created under an existing label. Use a new version-label (or delete the existing version) and retry.'
+      'and a new version cannot be created under an existing label. Use a new version-label, or delete the existing version with DeleteSourceBundle=true, and retry.'
     );
   }
   if (normalized && normalized !== 'PROCESSED' && normalized !== 'UNPROCESSED') {
@@ -502,7 +502,7 @@ async function ensureReusableClusterVersion(
 function existingLabelError(versionLabel: string): Error {
   return new Error(
     `Application version '${versionLabel}' already exists and use-existing-application-version-if-available is false. ` +
-    'Re-run with a new version-label, delete the existing version, or set ' +
+    'Re-run with a new version-label, delete the existing version with DeleteSourceBundle=true, or set ' +
     'use-existing-application-version-if-available to true to deploy the existing version as-is.'
   );
 }

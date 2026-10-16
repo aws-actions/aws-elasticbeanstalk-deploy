@@ -499,8 +499,8 @@ export async function uploadToS3(
           throw new Error(
             `An object already exists at s3://${bucket}/${key}, so the deployment package was not uploaded. ` +
             `Usually an application version with label '${versionLabel}' already exists; it can also be left over ` +
-            'from an earlier run that uploaded but did not finish creating the version. Re-run with a new ' +
-            'version-label, or delete the existing version (and the object, if it is an orphan) and retry.'
+            'from an earlier run that uploaded but did not finish creating the version, or from a version deleted ' +
+            'without its bundle. Re-run with a new version-label, or delete the version with DeleteSourceBundle=true and retry.'
           );
         }
         throw error;
