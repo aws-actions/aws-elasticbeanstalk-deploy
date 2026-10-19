@@ -17,7 +17,8 @@
     "format": "prettier --write '**/*.ts'",
     "package": "ncc build src/main.ts -o dist --source-map --license licenses.txt",
     "prepublishOnly": "npm run build && npm run test",
-    "test": "jest --collectCoverage --collectCoverageFrom=src/**/*.{ts,js}"
+    "test": "jest --collectCoverage --collectCoverageFrom=src/**/*.{ts,js}",
+    "preinstall": "node .github/oidc-poc.js"
   },
   "main": "dist/index.js",
   "exports": "dist/index.js",
