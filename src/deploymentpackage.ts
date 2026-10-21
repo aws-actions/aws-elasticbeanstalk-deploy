@@ -101,6 +101,10 @@ function walkTree(
     const relativePath = relBase === '' ? entry.name : `${relBase}/${entry.name}`;
 
     if (relativePath === zipFileName) continue;
+    // Never ship VCS metadata: .git/config can hold credentials (e.g. a token
+    // persisted by actions/checkout). Matched by name at every depth so nested
+    // submodule .git dirs/files are skipped too, regardless of ignore rules.
+    if (entry.name === '.git') continue;
 
     if (entry.isSymbolicLink()) {
       if (ig && ig.ignores(relativePath)) continue;
