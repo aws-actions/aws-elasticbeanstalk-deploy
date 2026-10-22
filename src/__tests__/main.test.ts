@@ -2248,6 +2248,65 @@ describe('Main Functions', () => {
         expect.stringContaining('Skipping unreadable directory')
       );
     });
+
+    it('should never descend into a top-level .git directory', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [makeDirent('.git', { isDir: true }), makeDirent('.gitignore'), makeDirent('app.js')] as any;
+        }
+        if (String(dir) === '/project/.git') {
+          return [makeDirent('config'), makeDirent('HEAD')] as any;
+        }
+        return [] as any;
+      });
+
+      const files = collectFiles('/project', 'deploy.zip');
+      expect(files).toEqual(['.gitignore', 'app.js']);
+      expect(mockedFs.readdirSync).not.toHaveBeenCalledWith('/project/.git', expect.anything());
+    });
+
+    it('should skip .git even when ignore rules would keep it', () => {
+      const ignoreLib = require('ignore');
+      const ig = ignoreLib.default().add('*.log');
+
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [makeDirent('.git', { isDir: true }), makeDirent('app.js')] as any;
+        }
+        if (String(dir) === '/project/.git') {
+          return [makeDirent('config'), makeDirent('HEAD')] as any;
+        }
+        return [] as any;
+      });
+
+      const files = collectFiles('/project', 'deploy.zip', ig);
+      expect(files).toEqual(['app.js']);
+    });
+
+    it('should skip nested submodule .git files and directories', () => {
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [makeDirent('vendor', { isDir: true }), makeDirent('app.js')] as any;
+        }
+        if (String(dir) === '/project/vendor') {
+          return [makeDirent('libA', { isDir: true }), makeDirent('libB', { isDir: true })] as any;
+        }
+        if (String(dir) === '/project/vendor/libA') {
+          // Submodule checkouts use a .git file pointing at the parent's gitdir
+          return [makeDirent('.git'), makeDirent('a.js')] as any;
+        }
+        if (String(dir) === '/project/vendor/libB') {
+          return [makeDirent('.git', { isDir: true }), makeDirent('b.js')] as any;
+        }
+        if (String(dir) === '/project/vendor/libB/.git') {
+          return [makeDirent('config')] as any;
+        }
+        return [] as any;
+      });
+
+      const files = collectFiles('/project', 'deploy.zip');
+      expect(files).toEqual(['vendor/libA/a.js', 'vendor/libB/b.js', 'app.js']);
+    });
   });
 
   describe('createZipFile with ignore filtering', () => {
@@ -2360,6 +2419,29 @@ describe('Main Functions', () => {
         (call: any[]) => call[1]?.name === 'debug.log'
       );
       expect(debugAdded).toBe(false);
+    });
+
+    it('should exclude .git from the archive when no ignore file is provided', async () => {
+      const archiver = require('archiver');
+      const mockArchiveInstance = archiver();
+      mockedFs.readdirSync.mockImplementation((dir: any) => {
+        if (String(dir) === '/project') {
+          return [
+            { name: '.git', isDirectory: () => true, isSymbolicLink: () => false, isFile: () => false },
+            { name: 'app.js', isDirectory: () => false, isSymbolicLink: () => false, isFile: () => true },
+          ] as any;
+        }
+        if (String(dir) === '/project/.git') {
+          return [{ name: 'config', isDirectory: () => false, isSymbolicLink: () => false, isFile: () => true }] as any;
+        }
+        return [] as any;
+      });
+
+      await createZipFile('deploy.zip', [], null, '/project');
+
+      const fileNames = mockArchiveInstance.file.mock.calls.map((c: any[]) => c[1].name);
+      expect(fileNames).toContain('app.js');
+      expect(fileNames.some((n: string) => n.startsWith('.git/'))).toBe(false);
     });
   });
 
